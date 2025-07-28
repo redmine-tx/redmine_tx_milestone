@@ -1,0 +1,98 @@
+<% content_for :header_tags do %>
+    <%= context_menu %>
+    <%= javascript_include_tag 'context_menu' %>
+    <style>
+      .tip {
+        color: red;
+      }
+    </style>
+  <% end %>
+  
+  <% html_title("연기된 일감 조회") %>
+  
+  <%
+  
+  # 프로젝트 ID 조회
+  pid = Project.find_by(name: params[:project_id])&.id
+  
+  issues = Issue.where( project_id: pid )
+                .where.not( due_date: nil )
+                .where( status_id: IssueStatus.in_progress_ids )
+                .open
+                .where( due_date: Date.today.. )
+
+  delayed_days_hash = {}
+
+  issues = issues.select { |issue|
+    delayed = false
+    started = false
+    delayed_days = 0
+    
+    issue.journals.order(:created_on).each do |journal|
+      # due_date 변경 확인
+      due_date_detail = journal.visible_details.find { |d| d.prop_key == 'due_date' }
+      if due_date_detail && due_date_detail.old_value.present? && due_date_detail.value.present?
+        begin
+          if Date.parse(due_date_detail.value) > Date.parse(due_date_detail.old_value)
+            delayed = true if started
+            delayed_days = ( Date.parse(due_date_detail.value) - Date.parse(due_date_detail.old_value) ).to_i
+          end
+        rescue ArgumentError
+          # Date.parse 실패 시 무시
+        end
+      end
+      
+      # status_id 변경 확인
+      status_detail = journal.visible_details.find { |d| d.prop_key == 'status_id' }
+      if status_detail && status_detail.value.present? && IssueStatus.in_progress_ids.include?(status_detail.value.to_i)
+        started = true
+      end
+
+      # status_id 리셋
+      if status_detail && status_detail.old_value.present? && IssueStatus.in_progress_ids.include?(status_detail.old_value.to_i) && !IssueStatus.in_progress_ids.include?(status_detail.value.to_i)
+        delayed = false
+        delayed_days = 0
+        started = false
+      end
+
+      # 목표버전이 변경된 경우 delayed 를 false 로 초기화 하고 delayed_days 를 0 으로 초기화
+      fixed_version_detail = journal.visible_details.find { |d| d.prop_key == 'fixed_version_id' }
+      if fixed_version_detail && fixed_version_detail.old_value.present? != fixed_version_detail.value.present? && fixed_version_detail.old_value.present?
+        delayed = false
+        delayed_days = 0
+      end
+    end
+
+    delayed_days_hash[issue.id] = delayed_days if delayed
+    
+    delayed
+  }
+
+    issues = issues.sort_by { |issue| 0 - delayed_days_hash[issue.id] }
+
+    grade_d_issues = issues.select { |issue| delayed_days_hash[issue.id] && delayed_days_hash[issue.id] <= 2 }
+    grade_c_issues = issues.select { |issue| delayed_days_hash[issue.id] && delayed_days_hash[issue.id] > 2 && delayed_days_hash[issue.id] <= 5 }
+    grade_b_issues = issues.select { |issue| delayed_days_hash[issue.id] && delayed_days_hash[issue.id] > 5 && delayed_days_hash[issue.id] < 30 }
+    grade_a_issues = issues.select { |issue| delayed_days_hash[issue.id] && delayed_days_hash[issue.id] >= 30 }
+  %>
+
+  <%if issues.empty? %>
+    <p>최초 설정한 완료일이 뒤로 밀린 일감이 없습니다.</p>
+  <% else %>
+    <% if grade_a_issues.any? %>
+      <h2>1달 이상 연기된 일감</h2>
+      <%= render_issues( l(:label_sc_report_my_page_caution), @project, grade_a_issues, [:id, :tracker, :priority, :status, :category, :assigned_to, :subject, :fixed_version_plus, :done_ratio, :due_date, :tags_relations] ) %>
+    <% end %>
+    <% if grade_b_issues.any? %>
+      <h2>1주일 초과 연기된 일감</h2>
+      <%= render_issues( l(:label_sc_report_my_page_caution), @project, grade_b_issues, [:id, :tracker, :priority, :status, :category, :assigned_to, :subject, :fixed_version_plus, :done_ratio, :due_date, :tags_relations] ) %>
+    <% end %>
+    <% if grade_c_issues.any? %>
+      <h2>3~5일 연기된 일감</h2>
+      <%= render_issues( l(:label_sc_report_my_page_caution), @project, grade_c_issues, [:id, :tracker, :priority, :status, :category, :assigned_to, :subject, :fixed_version_plus, :done_ratio, :due_date, :tags_relations] ) %>
+    <% end %>
+    <% if grade_d_issues.any? %>
+      <h2>1~2일 연기된 일감</h2>
+      <%= render_issues( l(:label_sc_report_my_page_caution), @project, grade_d_issues, [:id, :tracker, :priority, :status, :category, :assigned_to, :subject, :fixed_version_plus, :done_ratio, :due_date, :tags_relations] ) %>
+    <% end %>
+  <% end %>

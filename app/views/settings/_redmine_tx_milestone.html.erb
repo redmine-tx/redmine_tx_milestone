@@ -1,0 +1,111 @@
+<div class="container">
+
+  <h3>일정 자동 배치 설정</h3>
+  <p>
+    <label for="settings_setting_milestone_use_redmine_auto_schedule">레드마인 자동 일정 배치 사용 여부</label>
+    <%= check_box_tag "settings[setting_milestone_use_redmine_auto_schedule]", @settings["setting_milestone_use_redmine_auto_schedule"], @settings["setting_milestone_use_redmine_auto_schedule"] == 'true' %>
+  </p>
+   
+  <h3>마감기한 설정</h3>
+  
+  <% (1..5).each do |i| %>
+
+    <p>
+      <label for="settings_setting_milestone_days_<%= i %>">마감기한<%= i %> 일수</label>
+      <%= number_field_tag "settings[setting_milestone_days_#{i}]", @settings["setting_milestone_days_#{i}"], size: 10, min: 1 %>
+    </p>
+
+     <p>
+      <label for="settings_setting_milestone_title_<%= i %>">마감기한<%= i %> 제목</label>
+      <%= text_field_tag "settings[setting_milestone_title_#{i}]", @settings["setting_milestone_title_#{i}"], size: 30 %>
+    </p>
+    
+  <% end %>    
+ 
+</div>
+
+<style>
+.container {
+  max-width: 1200px;
+  margin: 0 auto;
+  padding: 20px;
+  box-sizing: border-box;
+}
+
+.section {
+  background: #fff;
+  border-radius: 8px;
+  box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+  padding: 20px;
+  margin-bottom: 24px;
+}
+
+.title {
+  color: #2c3e50;
+  font-size: 1.2em;
+  margin-bottom: 20px;
+  padding-bottom: 10px;
+  border-bottom: 2px solid #eee;
+}
+
+.grid {
+  display: flex;
+  flex-direction: column;
+  gap: 20px;
+  width: 100%;
+}
+
+.item {
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  gap: 8px;
+  width: 100%;
+  box-sizing: border-box;
+}
+
+.item h3 {
+  font-weight: 600;
+  color: #555;
+  font-size: 0.9em;
+  display: block;
+  width: 100%;
+  text-align: left;
+  margin-bottom: 4px;
+}
+
+.select-wrapper {
+  width: 100%;
+}
+
+.select {
+  width: 100%;
+  padding: 8px;
+  border: 1px solid #ddd;
+  border-radius: 4px;
+  background-color: #f8f9fa;
+  min-height: 120px;
+  box-sizing: border-box;
+}
+
+.select:focus {
+  border-color: #3498db;
+  outline: none;
+  box-shadow: 0 0 0 2px rgba(52,152,219,0.2);
+}
+
+/* 화면이 넓을 때는 2열 또는 3열로 표시 */
+@media (min-width: 768px) {
+  .grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(350px, 1fr));
+    gap: 20px;
+  }
+  
+  .item {
+    min-width: 0;
+  }
+}
+</style>
+
+<%= Setting[:plugin_redmine_tx_milestone] %>

@@ -1,0 +1,18 @@
+<div class="tabs">
+  <ul>
+    <li><%= link_to '🏠 시작', '/projects/' + params[:project_id].to_s + '/milestone/tools', class: params[:tool].nil? ? 'selected' : '' %></li>
+    <li><%= link_to '🔗 목표버전 검증', '/projects/' + params[:project_id].to_s + '/milestone/tools/validate', class: params[:tool] == 'validate' ? 'selected' : '' %></li>
+    <li><%= link_to '📅 일정 동기화', '/projects/' + params[:project_id].to_s + '/milestone/tools/sync_parent_date', class: params[:tool] == 'sync_parent_date' ? 'selected' : '' %></li>
+    <li><%= link_to '🕒 연기 일감 조회', '/projects/' + params[:project_id].to_s + '/milestone/tools/delayed_issues', class: params[:tool] == 'delayed_issues' ? 'selected' : '' %></li>
+  </ul>
+</div>
+
+<% if params[:tool] == 'validate' %>
+  <%= render :partial => 'milestone/tools/validate' %>
+<% elsif params[:tool] == 'sync_parent_date' %>
+  <%= render :partial => 'milestone/tools/sync_parent_date' %>
+<% elsif params[:tool] == 'delayed_issues' %>
+  <%= render :partial => 'milestone/tools/delayed_issues' %>
+<% else %>
+  <%= render :partial => 'milestone/tools/welcome_tools' %>
+<% end %>

@@ -1,0 +1,5 @@
+<% if params[:user_id] || params[:parent_issue_id] then %>
+    <%= render :partial => 'milestone/tetris_auto_schedule' %>
+<% else %>
+    <%= render :partial => 'milestone/tetris_select_target' %>
+<% end %>

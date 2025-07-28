@@ -1,0 +1,154 @@
+<div class="issue-auto-schedule">
+  <h3>메인 일감 단위 자동 배치</h3>
+  <p style="color: #666; margin-bottom: 20px;">
+    메인 일감을 기준으로 하위 일감들의 일정을 자동으로 배치합니다.<br>
+    메인 일감의 ID를 입력하여 자동 배치를 시작하세요.
+  </p>
+  
+  <div class="issue-input-section">
+    <div class="form-group">
+      <label for="issue-id-input">일감 ID:</label>
+      <input type="number" id="issue-id-input" placeholder="일감 ID를 입력하세요" class="issue-id-field" min="1">
+    </div>
+    
+    <div class="form-actions">
+      <button type="button" id="start-auto-schedule" class="button button-primary" disabled>
+        ⚡ 시작
+      </button>
+    </div>
+  </div>
+  
+  <div class="help-text">
+    <h4>💡 사용 방법</h4>
+    <ul>
+      <li>메인 일감의 ID를 입력하세요</li>
+      <li>해당 일감의 하위 일감들이 자동으로 배치됩니다</li>
+      <li>추정 작업 시간이 설정된 일감만 처리됩니다</li>
+    </ul>
+  </div>
+</div>
+
+<script>
+$(document).ready(function() {
+  var projectId = '<%= params[:project_id] %>';
+  
+  // 입력창 변경 이벤트
+  $('#issue-id-input').on('input', function() {
+    var issueId = $(this).val().trim();
+    var startButton = $('#start-auto-schedule');
+    
+    if (issueId && !isNaN(issueId) && parseInt(issueId) > 0) {
+      startButton.prop('disabled', false);
+    } else {
+      startButton.prop('disabled', true);
+    }
+  });
+  
+  // 엔터키 처리
+  $('#issue-id-input').on('keypress', function(e) {
+    if (e.which === 13) { // Enter key
+      $('#start-auto-schedule').click();
+    }
+  });
+  
+  // 시작 버튼 클릭 이벤트
+  $('#start-auto-schedule').click(function() {
+    var issueId = $('#issue-id-input').val().trim();
+    
+    if (issueId && !isNaN(issueId) && parseInt(issueId) > 0) {
+      var url = '/projects/' + projectId + '/milestone/tetris/issues/' + issueId;
+      window.location.href = url;
+    } else {
+      alert('올바른 일감 ID를 입력해주세요.');
+    }
+  });
+});
+</script>
+
+<style>
+.issue-auto-schedule {
+  background: #fff;
+  padding: 20px;
+  border-radius: 8px;
+  box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+  margin: 20px 0;
+}
+
+.issue-auto-schedule h3 {
+  margin-top: 0;
+  color: #333;
+  font-size: 1.2em;
+}
+
+.issue-input-section {
+  background: #f9f9f9;
+  padding: 20px;
+  border-radius: 5px;
+  margin: 20px 0;
+}
+
+.form-group {
+  margin-bottom: 15px;
+}
+
+.form-group label {
+  display: block;
+  margin-bottom: 5px;
+  font-weight: bold;
+  color: #333;
+}
+
+.issue-id-field {
+  width: 200px;
+  padding: 8px 12px;
+  border: 1px solid #ddd;
+  border-radius: 4px;
+  font-size: 14px;
+  transition: border-color 0.3s;
+}
+
+/* 스핀 버튼 제거 */
+.issue-id-field::-webkit-outer-spin-button,
+.issue-id-field::-webkit-inner-spin-button {
+  -webkit-appearance: none;
+  margin: 0;
+}
+
+.issue-id-field[type=number] {
+  -moz-appearance: textfield;
+}
+
+.issue-id-field:focus {
+  outline: none;
+  border-color: #4CAF50;
+  box-shadow: 0 0 5px rgba(76, 175, 80, 0.3);
+}
+
+.form-actions {
+  margin-top: 15px;
+}
+
+
+.help-text {
+  margin-top: 20px;
+  padding: 15px;
+  background-color: #f0f8ff;
+  border-radius: 5px;
+  border-left: 4px solid #4CAF50;
+}
+
+.help-text h4 {
+  margin-top: 0;
+  color: #333;
+}
+
+.help-text ul {
+  margin-bottom: 0;
+}
+
+.help-text li {
+  margin-bottom: 5px;
+  color: #666;
+}
+</style>
+

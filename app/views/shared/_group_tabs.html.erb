@@ -1,0 +1,10 @@
+<div class="tabs">
+  <ul>
+    <li><%= link_to "전체보기", "?view=#{current_view}", class: (current_view != 'group_detail' || selected_group_id.blank? ? 'selected' : '') %></li>
+    <% groups.each do |group, users| %>
+      <% if users.present? %>
+        <li><%= link_to group.name, "?view=group_detail&group_id=#{group.id}", class: (selected_group_id == group.id.to_s ? 'selected' : '') %></li>
+      <% end %>
+    <% end %>
+  </ul>
+</div> 

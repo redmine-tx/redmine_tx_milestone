@@ -1,0 +1,59 @@
+<% content_for :header_tags do %>
+    <%= context_menu %>
+    <%= javascript_include_tag 'context_menu' %>
+    <style>
+      .tip {
+        color: red;
+      }
+    </style>
+  <% end %>
+  
+  <h2>부모와 자식의 목표버전이 다른 일감들</h2>
+  <% html_title("목표버전 검증") %>
+  
+  <%
+  
+  # 프로젝트 ID 조회
+  pid = Project.find_by(name: params[:project_id])&.id
+  
+  versions = Version.includes(:project)
+                     .where(project_id: pid)
+                     .index_by(&:id)
+  
+  parent_issues = Issue.joins("INNER JOIN issues AS child_issues ON issues.id = child_issues.parent_id")
+                      .where.not("issues.fixed_version_id = child_issues.fixed_version_id")
+                      .where.not(issues: { status_id: IssueStatus.completed_ids })
+                      .where.not(issues: { status_id: IssueStatus.discarded_ids })
+                      .where.not('child_issues.status_id': IssueStatus.completed_ids )
+                      .where.not('child_issues.status_id': IssueStatus.discarded_ids )
+                      .distinct
+  all_issues = parent_issues.map { |issue| [ issue, issue.children ] }.flatten
+  
+  if parent_issues.empty? %>
+    <p>목표버전이 다른 부모-자식 일감이 없습니다.</p>
+  <% else %>
+    <!--
+    <ul>
+      <% parent_issues.each do |issue| %>
+               
+               <li> <span class="tag-label-color" style="background-color: <%= get_version_color(versions[issue.fixed_version_id]) %>"><%= link_to(versions[issue.fixed_version_id].name, "/versions/#{issue.fixed_version_id}") %></span> <%= link_to("##{issue.id} #{issue.subject}", "/issues/#{issue.id}") %>
+  
+                  <% childs = issue.children.select { |c| c.fixed_version_id != issue.fixed_version_id }
+  
+                  if childs.size > 0 then %>
+                      <ul>
+                          <% childs.each do |child| %>
+                              <li> <span class="tag-label-color" style="background-color: #8ae"><%= link_to( versions[child.fixed_version_id] ? versions[child.fixed_version_id].name : '???', "/versions/#{child.fixed_version_id}") %></span> <%= link_to("##{child.id} #{child.subject}", "/issues/#{child.id}") %>
+                          <% end %>
+                      </ul>
+                  <% end %>
+               
+               <% end %>
+    </ul>
+    -->
+  
+    <% parent_issues.each do |issue| %>
+      <%= render_issues( l(:label_sc_report_my_page_caution), @project, ( [issue] + issue.children ), [:id, :tracker, :category, :status, :priority, :assigned_to, :subject, :fixed_version_plus, :done_ratio, :due_date, :tags_relations] ) %>
+      <br>
+    <% end %>
+  <% end %>

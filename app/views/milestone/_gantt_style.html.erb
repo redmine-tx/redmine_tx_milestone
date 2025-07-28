@@ -1,0 +1,318 @@
+<style>
+  /* gantt-wrapper: 간트 차트 전체 컨테이너의 스타일 초기화 */
+  .gantt-wrapper {
+    all: initial; /* 모든 CSS 속성을 초기값으로 설정 (상속 방지) */
+    * {
+      all: unset; /* 자식 요소들의 모든 CSS 속성을 상속받거나 초기값으로 설정 */
+    }
+  }
+
+  /* gantt-info-container: 정보 표시 영역, 가로 스크롤 가능 */
+  .gantt-wrapper .gantt-info-container {
+    overflow-x: auto; /* 내용이 넘칠 경우 가로 스크롤바 표시 */
+    overflow-y: hidden; /* 세로 스크롤바는 숨김 */
+    position: relative; /* 자식 요소의 position:absolute 기준점 역할 */
+  }
+
+  /* gantt-container: 간트 차트의 메인 컨테이너, 가로 스크롤 가능 */
+  .gantt-wrapper .gantt-container {
+    overflow-x: auto; /* 내용이 넘칠 경우 가로 스크롤바 표시 */
+    overflow-y: hidden; /* 세로 스크롤바는 숨김 */
+    position: relative; /* 자식 요소의 position:absolute 기준점 역할 */
+  }
+  
+  /* gantt-grid: 간트 차트의 그리드 레이아웃 */
+  .gantt-wrapper .gantt-grid {
+    display: grid; /* CSS 그리드 레이아웃 사용 */
+    position: relative; /* 자식 요소의 position:absolute 기준점 역할 */
+    min-width: 100%; /* 최소 너비를 부모 요소의 100%로 설정 */
+  }
+  
+  /* task-name, assignee: 작업명과 담당자 열의 기본 스타일 */
+  .gantt-wrapper .task-name, 
+  .gantt-wrapper .assignee {
+    position: sticky; /* 스크롤 시 특정 위치에 고정 */
+    background: white; /* 배경색은 흰색 (고정 시 아래 내용 가리기 위함) */
+    display: flex; /* Flexbox 레이아웃 사용 (자식 요소 정렬 용이) */
+    align-items: center; /* 자식 요소들을 세로 중앙 정렬 */
+    z-index: 20; /* 다른 요소들보다 위에 표시되도록 z-축 순서 설정 */
+    font-size: 12px;
+    border-bottom: 1px solid #ddd;
+  }
+
+  /* task-name: 작업명 열 스타일 */
+  .gantt-wrapper .task-name {
+    position: sticky; /* 스크롤 시 특정 위치에 고정 */
+    background: white;
+    z-index: 20;
+    left: 0; /* 가로 스크롤 시 왼쪽에 고정 */
+    border-right: 1px solid #ccc;
+    border-bottom: 1px solid #ddd;
+    white-space: nowrap; /* 텍스트 줄 바꿈 방지 */
+    overflow: hidden; /* 넘치는 텍스트 숨김 */
+    text-overflow: ellipsis; /* 넘치는 텍스트는 말줄임표(...)로 표시 */
+    padding: 0 5px;
+    display: flex;
+    align-items: center;
+  }
+
+  .gantt-wrapper .task-name > span {
+    min-width: 0; /* flex 아이템이 내용에 따라 줄어들 수 있도록 설정 */
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+
+  .gantt-wrapper .task-name-text {
+    white-space: nowrap;
+    font-size: 20px;
+    max-width: 100%; /* 부모 너비를 넘지 않도록 설정 */
+    vertical-align: middle;
+  }
+
+  /* assignee: 담당자 열 스타일 */
+  .gantt-wrapper .assignee {
+    border-right: 2px solid #ccc;
+    padding: 0 5px;
+    z-index: 20; /* task-name과 동일한 z-index 레벨 */
+  }
+
+  .gantt-wrapper .assignee {
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    display: block; /* 기본적으로 블록 레벨 요소로 동작 */
+  }
+  
+  /* date-header: 날짜 헤더 스타일 */
+  .gantt-wrapper .date-header {
+    text-align: center;
+    padding: 2px 0;
+    font-size: 10px;
+    border-bottom: 1px solid #ccc;
+    min-width: 18px; /* 각 날짜 셀의 최소 너비 */
+  }
+  
+  /* month-header: 월 헤더 스타일 */
+  .gantt-wrapper .month-header {
+    text-align: center;
+    padding: 2px;
+    font-size: 10px;
+    border-bottom: 1px solid #ccc;
+    background-color: #f5f5f5;
+    min-width: 18px; /* 각 월 셀의 최소 너비, date-header와 동기화 */
+  }
+  
+  /* today-column: '오늘' 날짜 표시 컬럼 */
+  .gantt-wrapper .today-column {
+    position: absolute; /* gantt-grid 기준 절대 위치 */
+    border-left: 1px dashed #ff4444; /* 왼쪽에 점선 테두리 */
+    height: 100%; /* 부모 요소 높이만큼 채움 */
+    z-index: 10; /* 다른 요소들 위에 표시 (task-bar보다는 아래) */
+  }
+
+  /* mark-column: 특정 날짜 표시 컬럼 (마일스톤 등) */
+  .gantt-wrapper .mark-column {
+    position: absolute; /* gantt-grid 기준 절대 위치 */
+    border-left: 1px dashed #4444ff;
+    height: 100%;
+    z-index: 10;
+  }
+
+  /* mark-text: 특정 날짜 표시 컬럼의 텍스트 */
+  .gantt-wrapper .mark-text {
+    position: absolute; /* gantt-grid 기준 절대 위치 */
+    font-size: 10px;
+    color: #4444ff;
+    z-index: 10; /* mark-column과 동일 레벨 */
+    white-space: nowrap; /* 텍스트 줄 바꿈 방지 */
+  }
+
+  /* blocked-grid: 차단된 기간 표시 (예: 주말, 공휴일) */
+  .gantt-wrapper .blocked-grid {
+    position: absolute; /* gantt-grid 기준 절대 위치 */
+    background: repeating-linear-gradient( /* 반복되는 대각선 패턴으로 배경 채움 */
+      135deg,
+      rgba(0, 0, 0, 0.3),
+      rgba(0, 0, 0, 0.3) 1px,
+      transparent 1px,
+      transparent 4px
+    );
+    height: 100%;
+    z-index: 0; /* 가장 아래에 위치 (다른 요소들 밑으로) */
+  }
+  
+  /* task-row: 각 작업 행의 컨테이너 */
+  .gantt-wrapper .task-row {
+    display: contents; /* 요소 자체는 레이아웃에 영향을 주지 않고, 자식 요소들이 부모 grid에 직접 배치되도록 함 */
+  }
+  
+  /* task-cell: 각 작업 행의 날짜 셀 */
+  .gantt-wrapper .task-cell {
+    position: relative; /* 자식 요소(task-bar 등)의 position:absolute 기준점 */
+    border-bottom: 1px solid #eee;
+    border-right: 1px solid #eee;
+    min-width: 18px; /* date-header와 동일한 최소 너비 유지 */
+    display: flex; /* 내부 요소 정렬을 위해 flex 사용 */
+    align-items: center; /* 세로 중앙 정렬 */
+    justify-content: center; /* 가로 중앙 정렬 */
+  }
+
+  /* task-cell.w: 주말(Weekend) 또는 특정 상태의 셀 강조 */
+  .gantt-wrapper .task-cell.w {
+    background-color: rgba(255, 0, 0, 0.1); /* 배경색으로 구분 */
+  }
+
+  /* task-cell.n: 완료기한 없음 강조 */
+  .gantt-wrapper .task-cell.n {
+    background-color: rgba(0, 0, 0, 0.1); /* 배경색으로 구분 */
+  }
+  
+  /* task-bar: 간트 차트의 작업 막대 */
+  .gantt-wrapper .task-bar {
+    margin-left: 0; /* task-cell 내에서 왼쪽 정렬 */
+    margin-top: 0.125em; /* 위쪽 여백 */
+    background: #7fa;
+    border-radius: 0.1875em;
+    z-index: 2; /* 날짜 셀(task-cell) 위, today-column 보다는 아래에 위치 */
+    /* position: absolute 또는 relative는 JavaScript에서 동적으로 설정될 것으로 예상 */
+  }
+
+  /* task-bar-progress: 작업 진행률 표시 바 */
+  .gantt-wrapper .task-bar-progress {
+    position: absolute; /* task-bar 기준 절대 위치 */
+    top: 0;
+    left: 0;
+    height: 100%;
+    background: #5d8;
+    border-radius: 0.1875em; /* task-bar와 동일한 둥근 모서리 */
+    display: block; /* 너비(width)를 가질 수 있도록 블록 요소로 변경 */
+    /* width는 JavaScript에서 진행률에 따라 동적으로 설정될 것으로 예상 */
+  }
+
+  .gantt-wrapper .task-bar.completed {
+    background: #ddd;
+  }
+
+  .gantt-wrapper .task-bar.confirm {
+    background: #ffeb3b;
+  }
+
+  .gantt-wrapper .task-bar-progress.confirm {
+    background: #ffc107; /* 더 어두운 노란색으로 변경하여 진행률을 구분 */
+  }
+
+  /* arrow-line: 작업 간의 의존성 연결선 */
+  .gantt-wrapper .arrow-line {
+    position: absolute; /* gantt-grid 기준 절대 위치 */
+    left: 0; /* JavaScript에서 위치 동적 계산 */
+    height: 2px;
+    background-color: gray;
+    z-index: 15; /* 다른 요소들 위에 표시 (task-name, assignee 제외) */
+  }
+
+  /* arrow-line.show-after::after: 연결선 끝의 화살표 머리 (오른쪽) */
+  .gantt-wrapper .arrow-line.show-after::after {
+    content: '';
+    position: absolute;
+    right: 0;
+    top: -4px; /* 선의 중앙에 위치하도록 조정 */
+    width: 2px; /* 화살표 머리 두께 */
+    height: 4px; /* 화살표 머리 높이 (한쪽 날개 길이) */
+    z-index: 10; /* arrow-line과 동일 레벨 */
+    background-color: inherit; /* arrow-line의 색상 상속 */
+  }
+
+  /* arrow-line.show-before::before: 연결선 시작의 화살표 머리 (왼쪽) - 필요시 사용 */
+  .gantt-wrapper .arrow-line.show-before::before {
+    content: '';
+    position: absolute;
+    left: 0;
+    top: -4px;
+    width: 2px;
+    height: 4px;
+    z-index: 10;
+    background-color: inherit;
+  }
+
+  /* highlight-column: 특정 기간(예: 현재 주) 강조 표시 */
+  .gantt-wrapper .highlight-column {
+    position: absolute; /* gantt-grid 기준 절대 위치 */
+    height: 100%;
+    left: 0; /* JavaScript에서 위치 동적 계산 */
+    z-index: 1;  /* task-bar보다는 아래에 위치하도록 (task-cell과 today-column 사이) */
+    pointer-events: none; /* 마우스 이벤트를 가로채지 않음 */
+  }
+
+  /* 기본 스타일 재정의: Redmine 테마 등 외부 스타일에 의해 간트 차트 UI가 깨지는 것을 방지 */
+  .gantt-wrapper .box {
+    margin: 0;
+    padding: 0;
+    border: none;
+    background: none;
+  }
+
+  /* task-name 내부의 링크 스타일 */
+  .gantt-wrapper .task-name a {
+    cursor: pointer !important; /* 클릭 가능하도록 커서 모양 변경 (강제) */
+    user-select: none; /* 텍스트 선택 방지 */
+    -webkit-user-select: none;
+    -moz-user-select: none;
+    -ms-user-select: none;
+    white-space: nowrap; /* 부모의 스타일 상속 또는 재정의 */
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+
+  /* assignee 내부의 링크 스타일 */
+  .gantt-wrapper .assignee a {
+    cursor: pointer !important;
+    user-select: none;
+    -webkit-user-select: none;
+    -moz-user-select: none;
+    -ms-user-select: none;
+  }
+
+  /* cursor-container: 마우스 커서 위치 표시 컨테이너 */
+  .gantt-wrapper [class*="cursor-container-"] {
+    position: absolute;
+    left: 0;
+    right: 0;
+    z-index: 39;
+    background-color: rgba(255, 255, 0, 0.3);
+    pointer-events: none;
+    display: none;
+  }
+
+  /* 낮음 */
+  .task-name.priority-1,
+  .assignee.priority-1 {
+    background-color: rgba(0, 0, 255, 0.1);
+  }
+
+  /* 보통 */
+  .task-name.priority-2,
+  .assignee.priority-2 {
+  }
+
+  /* 높음 */
+  .task-name.priority-3,
+  .assignee.priority-3 {
+    background-color: rgba(255, 0, 0, 0.1);
+  }
+
+  /* 급한 */
+  .task-name.priority-4,
+  .assignee.priority-4 {
+    background-color: rgba(255, 0, 0, 0.2);
+  }
+
+  /* 긴급 */
+  .task-name.priority-5,
+  .assignee.priority-5 {
+    background-color: rgba(255, 0, 0, 0.3);
+  }
+</style>
+
+<%# Font Awesome CSS 추가 %>
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css">

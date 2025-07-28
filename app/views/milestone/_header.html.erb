@@ -1,0 +1,11 @@
+<div class="tabs">
+  <ul>
+    <li><%= link_to '🏠 시작', '/projects/' + params[:project_id].to_s + '/milestone', class: action_name == 'index' ? 'selected' : '' %></li>
+    <li><%= link_to '🗺️ 로드맵', '/projects/' + params[:project_id].to_s + '/milestone/roadmap', class: action_name == 'roadmap' ? 'selected' : '' %></li>
+    <li><%= link_to '📊 간트차트', '/projects/' + params[:project_id].to_s + '/milestone/gantt', class: action_name == 'gantt' ? 'selected' : '' %></li>
+    <li><%= link_to '👥 작업 현황(부서)', '/projects/' + params[:project_id].to_s + '/milestone/group_detail', class: action_name == 'group_detail' ? 'selected' : '' %></li>
+    <li><%= link_to '⚡ 일정 자동 배치', '/projects/' + params[:project_id].to_s + '/milestone/tetris', class: action_name == 'tetris' ? 'selected' : '' %></li>
+    <li><%= link_to '🔧 검증도구', '/projects/' + params[:project_id].to_s + '/milestone/tools', class: action_name == 'tools' ? 'selected' : '' %></li>
+    <li><%= link_to '🔍 일감 통계', '/projects/' + params[:project_id].to_s + '/milestone/report', class: action_name == 'report' ? 'selected' : '' %></li>
+  </ul>
+</div>

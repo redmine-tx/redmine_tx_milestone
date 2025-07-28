@@ -1,0 +1,6 @@
+# English strings go here for Rails i18n
+en:
+  # my_label: "My label"
+  label_access_mypage_date: Last Access Date
+  label_arrival_time: Arrival Time
+  label_work_status: Work Status

@@ -1,0 +1,84 @@
+<%
+  e_group = TxBaseHelper.config_arr( 'e_group' )
+  group_id = params[:group_id] || ( ( User.current.group_ids ? User.current.group_ids : [] ) - e_group ).first
+%>
+
+<!-- 팀 탭 컨트롤 -->
+<%= render 'milestone/group_tabs',
+    selected_group_id: group_id %>
+
+<%
+  if group_id.nil?
+%>
+    <div style="border: 1px solid #ffcccb; background-color: #ffe6e6; padding: 20px; margin: 20px 0; border-radius: 4px; text-align: center;">
+        <h3 style="color: #d32f2f; margin: 0 0 10px 0;">그룹 정보 없음</h3>
+        <p style="color: #666; margin: 0; font-size: 14px;">
+            현재 계정은 그룹에 소속되어 있지 않습니다.<br>
+            다른 그룹 현황을 확인하시려면 위 탭에서 그룹을 선택해 주세요.
+        </p>
+    </div>
+<%
+    return
+  end
+
+  group = Group.find( group_id )
+
+  users = group.users.active
+  user_ids = users.map(&:id)
+
+  gantt_start_date = Date.today - 17.days
+  gantt_end_date = Date.today + 65.days
+
+  vacation_info = UserStatusHelper.get_user_vacation_info( gantt_start_date..gantt_end_date )
+
+  issues = Issue.where( '( worker_id IN (?) AND ( ( begin_time >= ? OR end_time >= ? ) OR ( begin_time IS NOT NULL AND end_time IS NULL ) ) ) OR 
+                            ( assigned_to_id IN (?) AND ( ( ( start_date IS NOT NULL AND start_date <= (?) ) OR ( due_date IS NOT NULL AND due_date <= (?) ) ) AND status_id NOT IN (?) ) )',
+                            user_ids, gantt_start_date, gantt_start_date, user_ids, gantt_end_date, gantt_end_date, IssueStatus.implemented_ids ).order(begin_time: :asc, start_date: :asc).select{ |issue| !IssueStatus.is_discarded?( issue.status_id ) && !IssueStatus.is_postponed?( issue.status_id ) }
+
+  major_issues = issues.select{ |issue| Tracker.is_in_roadmap?( issue.tracker_id ) }
+%>
+
+<% html_title( group.name ) %>
+
+<script>
+function toggleIssues(className, show) {
+    const elements = document.getElementsByClassName(className);
+    for (let el of elements) {
+        el.style.display = show ? 'block' : 'none';
+    }
+}
+
+// 페이지 로드 시 초기 상태 설정
+document.addEventListener('DOMContentLoaded', function() {
+    toggleIssues('support_issues', false);
+    toggleIssues('qa_issues', false);
+});
+</script>
+
+<div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 10px;">
+    <h2 style="margin: 0;"><%= group.name %> 근무 현황</h2>
+    
+    <div>
+        <label>
+            <input type="checkbox" id="show_support" onchange="toggleIssues('support_issues', this.checked)"> 관리 이슈 표시
+        </label>
+        <label style="margin-left: 15px;">
+            <input type="checkbox" id="show_qa" onchange="toggleIssues('qa_issues', this.checked)"> QA 이슈 표시
+        </label>
+    </div>
+</div>
+
+<% if major_issues.any? %>
+    <div style="border: 1px solid #ccc; padding: 15px; margin-bottom: 20px; border-radius: 4px;">
+        <%= render :partial => 'milestone/gantt_chart', locals: { title: '팀 주요 일감', issues: major_issues, vacation_info: vacation_info } %>
+    </div>
+<% end %>
+
+<% users.each do |user| %>
+  <div style="border: 1px solid #ccc; padding: 15px; margin-bottom: 20px; border-radius: 4px;">
+    <h2><%= user.name %></h2>
+    <%= render :partial => 'milestone/user_detail', locals: { user: user, vacation_info: vacation_info } %>
+  </div>
+<% end %>
+
+

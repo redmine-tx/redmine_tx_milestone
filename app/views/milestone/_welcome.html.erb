@@ -1,0 +1,169 @@
+<div class="milestone-welcome">
+  <div class="box">
+    <h3>📍 마일스톤 관리 시스템</h3>
+    <p>프로젝트의 주요 단계와 목표를 효율적으로 관리할 수 있는 통합 도구입니다.</p>
+    
+    <div class="milestone-features">
+      <div class="feature-item">
+        <h4><%= link_to '🗺️ 로드맵', '/projects/' + params[:project_id].to_s + '/milestone/roadmap', class: 'feature-link' %></h4>
+        <p>프로젝트의 버전별 주요 일감의 진행 상황을 추적하기 쉽도록 한눈에 보여줍니다. 버전별 주요 일감의 계획된 일정 및 프로젝트 진행 상황을 명확하게 파악할 수 있습니다.</p>
+      </div>
+
+      <div class="feature-item">
+        <h4><%= link_to '📊 간트차트', '/projects/' + params[:project_id].to_s + '/milestone/gantt', class: 'feature-link' %></h4>
+        <p>프로젝트의 일정과 작업 간의 의존관계를 시각적으로 표현하여 전체 프로젝트 흐름을 한눈에 파악할 수 있습니다. 작업 순서와 중요 경로를 명확히 확인할 수 있습니다.</p>
+      </div>
+
+      <div class="feature-item">
+        <h4><%= link_to '👥 작업현황 (부서)', '/projects/' + params[:project_id].to_s + '/milestone/group_detail', class: 'feature-link' %></h4>
+        <p>부서별 작업 배분과 진행 현황을 실시간으로 모니터링합니다. 각 부서의 업무량, 완료율, 지연 상황을 한눈에 확인하여 리소스 배분을 최적화할 수 있습니다.</p>
+      </div>
+
+      <div class="feature-item">
+        <h4><%= link_to '🔧 검증도구', '/projects/' + params[:project_id].to_s + '/milestone/tools', class: 'feature-link' %></h4>
+        <p>프로젝트 일관성을 유지하기 위한 검증 도구 모음입니다. 부모와 자식 일감의 목표버전 불일치 일감 관리, 상위-하위 일감 간의 불일치 일정 동기화 등을 통해 프로젝트 데이터의 정확성을 보장합니다.</p>
+      </div>
+
+      <div class="feature-item">
+        <h4><%= link_to '⚡ 일정 자동 배치', '/projects/' + params[:project_id].to_s + '/milestone/tetris', class: 'feature-link' %></h4>
+        <p>일감에 추정 작업 시간만 기입해 두면 작업 간의 의존관계와 리소스 가용성을 고려하여 최적의 일정을 자동으로 계산하고 배치합니다. 프로젝트 전체의 효율성을 극대화하고 병목 구간을 최소화합니다.</p>
+      </div>
+
+      <div class="feature-item">
+        <h4><%= link_to '🔍 일감 통계', '/projects/' + params[:project_id].to_s + '/milestone/report', class: 'feature-link' %></h4>
+        <p>프로젝트의 일감 진행 상황 통계를 확인할 수 있습니다. 일감 진행 상황 통계는 프로젝트의 일감 진행 상황 통계를 확인할 수 있습니다. 일감 진행 상황 통계는 프로젝트의 일감 진행 상황 통계를 확인할 수 있습니다.</p>
+      </div>
+    </div>
+
+    <div class="getting-started">
+      <h4>🚀 시작하기</h4>
+      <p>상단 메뉴에서 각 기능을 선택하여 관리를 시작하세요. 직관적인 인터페이스로 복잡한 프로젝트도 쉽게 관리할 수 있습니다.</p>
+    </div>
+  </div>
+</div>
+
+<% if defined?(RubyVM) && defined?(RubyVM::YJIT) && RubyVM::YJIT.enabled? %>
+  <div class="yjit-status">
+    <span class="status-badge enabled">✅ YJIT enabled</span>
+  </div>
+<% else %>
+  <div class="yjit-status">
+    <span class="status-badge disabled">❌ YJIT disabled</span>
+  </div>
+<% end %>
+
+<style>
+.milestone-welcome {
+  margin: 10px 0;
+}
+
+.milestone-welcome .box {
+  padding: 20px;
+  background: #f8f9fa;
+  border-radius: 8px;
+  border: 1px solid #e9ecef;
+}
+
+.milestone-welcome h3 {
+  color: #495057;
+  margin-bottom: 15px;
+  font-size: 1.4em;
+}
+
+.milestone-features {
+  display: grid;
+  gap: 15px;
+  margin: 20px 0;
+}
+
+.feature-item {
+  background: white;
+  padding: 15px;
+  border-radius: 6px;
+  border-left: 4px solid #007bff;
+  box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+}
+
+.feature-item h4 {
+  color: #007bff;
+  margin-bottom: 8px;
+  font-size: 1.1em;
+}
+
+.feature-link {
+  color: #007bff;
+  text-decoration: none;
+  transition: color 0.3s ease;
+}
+
+.feature-link:hover {
+  color: #0056b3;
+  text-decoration: none;
+}
+
+.feature-link:visited {
+  color: #007bff;
+}
+
+.feature-item p {
+  color: #6c757d;
+  line-height: 1.5;
+  margin: 0;
+  font-size: 0.95em;
+}
+
+.getting-started {
+  background: #e7f3ff;
+  padding: 15px;
+  border-radius: 6px;
+  margin-top: 20px;
+  border: 1px solid #b8daff;
+}
+
+.getting-started h4 {
+  color: #004085;
+  margin-bottom: 8px;
+}
+
+.getting-started p {
+  color: #004085;
+  margin: 0;
+  font-weight: 500;
+}
+
+.yjit-status {
+  margin: 20px 0;
+  text-align: right;
+}
+
+.status-badge {
+  display: inline-block;
+  padding: 8px 16px;
+  border-radius: 20px;
+  font-weight: 500;
+  font-size: 0.9em;
+  letter-spacing: 0.5px;
+}
+
+.status-badge.enabled {
+  background: linear-gradient(135deg, #28a745, #20c997);
+  color: white;
+  box-shadow: 0 2px 8px rgba(40, 167, 69, 0.3);
+}
+
+.status-badge.disabled {
+  background: linear-gradient(135deg, #6c757d, #495057);
+  color: white;
+  box-shadow: 0 2px 8px rgba(108, 117, 125, 0.3);
+}
+
+@media (max-width: 768px) {
+  .milestone-welcome .box {
+    padding: 15px;
+  }
+  
+  .feature-item {
+    padding: 12px;
+  }
+}
+</style>

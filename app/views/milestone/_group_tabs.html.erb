@@ -1,0 +1,12 @@
+<%  excluded_group_ids = TxBaseHelper.config_arr('e_group') || []
+    groups = Group.all.select{ |group| !excluded_group_ids.include?(group.id) }
+    selected_group_id ||= nil
+%>
+
+<div class="tabs">
+  <ul>
+    <% groups.each do |group, users| %>
+        <li><%= link_to group.name, "?view=group_detail&group_id=#{group.id}", class: (selected_group_id.to_s == group.id.to_s ? 'selected' : '') %></li>
+    <% end %>
+  </ul>
+</div> 

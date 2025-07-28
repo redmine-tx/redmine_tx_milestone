@@ -1,0 +1,48 @@
+<style>
+    .version-box {
+        border: 1px solid #999;
+        padding: 10px;
+        margin: 10px;
+        border-radius: 8px;
+    }
+</style>
+
+<%
+  versions = Version.where( "effective_date IS NOT NULL" ).open.order( :effective_date ).to_a
+  if @project then
+    versions = versions.select { |v| v.project_id == @project.id }
+  end
+  versions = versions[0..15]
+  
+  # 오늘 이후의 가장 빠른 버전을 기본값으로 설정
+  selected_version = if params[:version_id] then
+                        v = versions.find { |v| v.id == params[:version_id].to_i }
+                        v.nil? ? Version.find( params[:version_id].to_i ) : v
+                      else
+                        versions.find { |v| v.effective_date >= Date.today } || versions.first
+                      end
+%>
+
+<% html_title(selected_version.name.to_s) %>
+
+<div class="tabs" style="height: 48px;">
+  <ul>
+    <% versions.each do |version| %>
+      <li><%= link_to version.name.to_s, '/projects/' + params[:project_id].to_s + '/milestone/gantt/versions/' + version.id.to_s, class: ( selected_version && selected_version.id == version.id ) ? 'selected' : '' %></li>
+    <% end %>
+  </ul>
+</div>
+
+<div class="tab-content">
+
+<%
+    main_issues = Issue.where( fixed_version_id: selected_version.id ).where( tracker_id: Tracker.roadmap_trackers_ids ).where.not( status_id: IssueStatus.discarded_ids ).to_a
+    # status_id가 0인 이슈는 맨 아래로, 나머지는 done_ratio로 정렬
+    main_issues.sort_by! { |issue| [ IssueStatus.is_implemented?( issue.status_id ) ? 1 : 0, issue.done_ratio] }
+%>
+<h3><%= link_to selected_version.name.to_s, "/versions/#{selected_version.id}/edit" %></h3>
+<div class="version-box">
+    <%= render :partial => 'milestone/gantt_chart', locals: { title: '메인 일감', issues: main_issues, due_date: selected_version.effective_date, date_marks: selected_version.marks, gantt_opts: { show_status_history: false } } %>
+</div>
+
+</div>

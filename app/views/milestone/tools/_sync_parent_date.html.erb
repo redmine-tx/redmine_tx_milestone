@@ -1,0 +1,184 @@
+<% content_for :header_tags do %>
+    <%= context_menu %>
+    <%= javascript_include_tag 'context_menu' %>
+    <style>
+      .tip {
+        color: red;
+      }
+      .header-controls {
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        margin-bottom: 10px;
+      }
+      .select-all-button {
+        /* margin-bottom: 10px; 제거 */
+      }
+      .sync-button {
+        /* margin-top: 20px; 제거 */
+        /* text-align: center; 제거 */
+      }
+    </style>
+    <script>
+      $(document).ready(function() {
+        // 모든 일감 선택 체크박스 기능
+        $('#master-toggle').change(function() {
+          var checked = $(this).is(':checked');
+          
+          // 모든 ids[] 체크박스 상태 변경
+          $('input[name="ids[]"]').each(function() {
+            $(this).prop('checked', checked);
+            var row = $(this).closest('tr');
+            if (checked) {
+              row.addClass('context-menu-selection');
+            } else {
+              row.removeClass('context-menu-selection');
+            }
+          });
+          
+          // 모든 테이블 헤더 체크박스도 동기화
+          $('input[name="check_all"]').prop('checked', checked);
+        });
+        
+        // 각 테이블의 헤더 체크박스 기능
+        $('input[name="check_all"]').change(function() {
+          var checked = $(this).is(':checked');
+          var table = $(this).closest('table');
+          
+          // 해당 테이블의 ids[] 체크박스들만 변경
+          table.find('input[name="ids[]"]').each(function() {
+            $(this).prop('checked', checked);
+            var row = $(this).closest('tr');
+            if (checked) {
+              row.addClass('context-menu-selection');
+            } else {
+              row.removeClass('context-menu-selection');
+            }
+          });
+          
+          updateMasterToggle();
+        });
+        
+        // 개별 체크박스 변경 시 마스터 토글 업데이트
+        $(document).on('change', 'input[name="ids[]"]', function() {
+          var row = $(this).closest('tr');
+          if ($(this).is(':checked')) {
+            row.addClass('context-menu-selection');
+          } else {
+            row.removeClass('context-menu-selection');
+          }
+          updateMasterToggle();
+        });
+        
+        function updateMasterToggle() {
+          var allCheckboxes = $('input[name="ids[]"]');
+          var checkedCheckboxes = $('input[name="ids[]"]:checked');
+          var masterToggle = $('#master-toggle');
+          
+          if (checkedCheckboxes.length === 0) {
+            masterToggle.prop('checked', false);
+            masterToggle.prop('indeterminate', false);
+          } else if (checkedCheckboxes.length === allCheckboxes.length) {
+            masterToggle.prop('checked', true);
+            masterToggle.prop('indeterminate', false);
+          } else {
+            masterToggle.prop('checked', false);
+            masterToggle.prop('indeterminate', true);
+          }
+        }
+        
+        // 초기 상태 설정
+        updateMasterToggle();
+      });
+
+      function syncParentDate() {
+        var selectedIds = [];
+        $('input[name="ids[]"]:checked').each(function() {
+          selectedIds.push($(this).val());
+        });
+
+        if (selectedIds.length === 0) {
+          alert('동기화할 일감을 선택해주세요.');
+          return;
+        }
+
+        if (!confirm('선택한 ' + selectedIds.length + '개 일감의 일정을 동기화하시겠습니까?')) {
+          return;
+        }
+
+        var formData = new FormData();
+        selectedIds.forEach(function(id) {
+          formData.append('ids[]', id);
+        });
+
+        fetch('/projects/<%= @project.identifier %>/milestone/sync_parent_date', {
+          method: 'POST',
+          body: formData,
+          headers: {
+            'X-CSRF-Token': $('meta[name="csrf-token"]').attr('content')
+          }
+        })
+        .then(response => response.json())
+        .then(data => {
+          if (data.success) {
+            alert('동기화가 완료되었습니다: ' + data.message);
+            location.reload();
+          } else {
+            alert('동기화 중 오류가 발생했습니다: ' + data.message);
+          }
+        })
+        .catch(error => {
+          console.error('Error:', error);
+          alert('동기화 중 오류가 발생했습니다.');
+        });
+      }
+    </script>
+  <% end %>
+  
+  <h2>자식의 완료일이 부모의 완료일을 초과하는 일감들</h2>
+  
+  <div class="header-controls">
+    <div class="select-all-button">
+      <label>
+        <input type="checkbox" id="master-toggle" onclick="toggleAllIssues(this.checked)"> 모든 일감 선택
+      </label>
+    </div>
+    <div class="sync-button">
+      <button type="button" class="button" onclick="syncParentDate()">선택한 일감들의 일정 동기화</button>
+    </div>
+  </div>
+
+  <%
+  # 프로젝트 ID 조회
+  pid = Project.find_by(name: params[:project_id])&.id
+  
+  versions = Version.includes(:project)
+                     .where(project_id: pid)
+                     .index_by(&:id)
+
+  tacerk_ids = Tracker.where( is_in_roadmap: true ).pluck(:id)
+  
+  parent_issues = Issue.where( project_id: pid )
+                      .where( tracker_id: tacerk_ids )
+                      .where.not( due_date: nil )
+                      .open
+                      .select { |parent| parent.fixed_version_id && parent.fixed_version.effective_date && parent.fixed_version.effective_date > Date.today - 2.month }
+  
+  all_issues = parent_issues.map { |parent|
+      invalid_child_issues = parent.children.select { |child|
+          child.start_date.present? && child.due_date.present? &&
+          ( parent.due_date == nil || child.due_date > parent.due_date ) &&
+          child.status_id && !child.status.is_discarded?
+        }
+
+     [ parent, invalid_child_issues ]
+  }.select { |pair| pair[1].size > 0 }
+  
+  if parent_issues.empty? %>
+    <p>자식과 일정이 불일치하는 일감이 없습니다.</p>
+  <% else %>
+    <% all_issues.each do |pair| %>
+      <%= render_issues( '자식과 부모 일정 불일치', @project, pair.flatten, [:id, :tracker, :category, :status, :assigned_to, :subject, :fixed_version_plus, :done_ratio, :start_date,:due_date,:tags_relations] ) %>
+      <br>
+    <% end %>
+  <% end %>

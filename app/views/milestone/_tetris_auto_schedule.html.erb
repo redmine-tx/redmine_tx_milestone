@@ -1,0 +1,183 @@
+<% content_for :header_tags do %>
+  <%= context_menu %>
+  <%= javascript_include_tag 'context_menu' %>
+<% end %>
+
+<script>
+    function autoScheduleIssues() {
+        var selectedIds = [];
+        document.querySelectorAll('input[name="ids[]"]:checked').forEach(function(checkbox) {
+            selectedIds.push(checkbox.value);
+        });
+
+        if (selectedIds.length === 0) {
+            alert('자동 배치할 일감을 선택해주세요.');
+            return;
+        }
+
+        if (!confirm('선택한 ' + selectedIds.length + '개 일감을 자동으로 배치해 보겠습니까? 배치 결과는 확정 하기 전까지 저장 되지 않습니다.')) {
+            return;
+        }
+
+        // 폼 데이터 생성
+        var form = document.createElement('form');
+        form.method = 'POST';
+        form.action = window.location.pathname;
+
+        // CSRF 토큰 추가
+        var csrfToken = document.querySelector('meta[name="csrf-token"]');
+        if (csrfToken) {
+            var csrfInput = document.createElement('input');
+            csrfInput.type = 'hidden';
+            csrfInput.name = 'authenticity_token';
+            csrfInput.value = csrfToken.getAttribute('content');
+            form.appendChild(csrfInput);
+        }
+
+        // submit 파라미터 추가 (name을 'submit'이 아닌 다른 이름으로 변경)
+        var submitInput = document.createElement('input');
+        submitInput.type = 'hidden';
+        submitInput.name = 'auto_schedule';
+        submitInput.value = 'true';
+        form.appendChild(submitInput);
+
+    <% if params[:user_id].present? %>
+        // user_id 파라미터 추가
+        var userIdInput = document.createElement('input');
+        userIdInput.type = 'hidden';
+        userIdInput.name = 'user_id';
+        userIdInput.value = '<%= params[:user_id] %>';
+        form.appendChild(userIdInput);
+    <% end %>
+
+    <% if params[:parent_issue_id].present? %>
+        // parent_issue_id 파라미터 추가
+        var parentIssueIdInput = document.createElement('input');
+        parentIssueIdInput.type = 'hidden';
+        parentIssueIdInput.name = 'parent_issue_id';
+        parentIssueIdInput.value = '<%= params[:parent_issue_id] %>';
+        form.appendChild(parentIssueIdInput);
+    <% end %>
+
+        // issue_ids 파라미터 추가
+        var issueIdsInput = document.createElement('input');
+        issueIdsInput.type = 'hidden';
+        issueIdsInput.name = 'issue_ids';
+        issueIdsInput.value = selectedIds.join(',');
+        form.appendChild(issueIdsInput);
+
+        // 폼을 body에 추가하고 제출
+        document.body.appendChild(form);
+        
+        // submit 함수가 오버라이드 되었을 가능성을 대비한 안전한 제출 방법
+        if (typeof form.submit === 'function') {
+            form.submit();
+        } else {
+            HTMLFormElement.prototype.submit.call(form);
+        }
+    }
+
+    <% if @result_issues.present? %>
+        function saveAutoSchedule() {
+            if (!confirm('배치된 일정을 확정하시겠습니까?')) {
+                return;
+            }
+
+            var issueData = <%= @result_issues.map { |i| { id: i.id, start_date: i.start_date.strftime('%Y-%m-%d'), due_date: i.due_date.strftime('%Y-%m-%d') } }.to_json.html_safe %>;
+            
+            // 폼 데이터 생성
+            var form = document.createElement('form');
+            form.method = 'POST';
+            form.action = window.location.pathname;
+
+            // CSRF 토큰 추가
+            var csrfToken = document.querySelector('meta[name="csrf-token"]');
+            if (csrfToken) {
+                var csrfInput = document.createElement('input');
+                csrfInput.type = 'hidden';
+                csrfInput.name = 'authenticity_token';
+                csrfInput.value = csrfToken.getAttribute('content');
+                form.appendChild(csrfInput);
+            }
+
+            // save_schedule 파라미터 추가
+            var saveInput = document.createElement('input');
+            saveInput.type = 'hidden';
+            saveInput.name = 'save_schedule';
+            saveInput.value = 'true';
+            form.appendChild(saveInput);
+
+        <% if params[:user_id].present? %>
+            // user_id 파라미터 추가
+            var userIdInput = document.createElement('input');
+            userIdInput.type = 'hidden';
+            userIdInput.name = 'user_id';
+            userIdInput.value = '<%= params[:user_id] %>';
+            form.appendChild(userIdInput);
+        <% end %>
+
+        <% if params[:parent_issue_id].present? %>
+            // parent_issue_id 파라미터 추가
+            var parentIssueIdInput = document.createElement('input');
+            parentIssueIdInput.type = 'hidden';
+            parentIssueIdInput.name = 'parent_issue_id';
+            parentIssueIdInput.value = '<%= params[:parent_issue_id] %>';
+            form.appendChild(parentIssueIdInput);
+        <% end %>
+
+            // issue_data 파라미터 추가
+            var issueDataInput = document.createElement('input');
+            issueDataInput.type = 'hidden';
+            issueDataInput.name = 'issue_data';
+            issueDataInput.value = JSON.stringify(issueData);
+            form.appendChild(issueDataInput);
+
+            // 폼을 body에 추가하고 제출
+            document.body.appendChild(form);
+            
+            if (typeof form.submit === 'function') {
+                form.submit();
+            } else {
+                HTMLFormElement.prototype.submit.call(form);
+            }
+        }
+    <% end %>
+
+    // 페이지 로드 시 이전에 선택된 이슈들을 체크
+    $(document).ready(function() {
+        <% if params[:issue_ids].present? %>
+            var selectedIssueIds = [<%= params[:issue_ids].split(',').map(&:to_i).join(',') %>];
+            selectedIssueIds.forEach(function(issueId) {
+                var checkbox = document.querySelector('input[name="ids[]"][value="' + issueId + '"]');
+                if (checkbox) {
+                    checkbox.checked = true;
+                    // 행도 선택된 상태로 표시
+                    var row = checkbox.closest('tr');
+                    if (row) {
+                        row.classList.add('context-menu-selection');
+                    }
+                }
+            });
+        <% end %>
+    });
+</script>
+
+<h1>일정 자동 배치</h1>
+
+<% if @result_issues.present? %>
+  <h2>자동 배치 결과:</h2>
+  <%= render :partial => 'milestone/gantt_chart', locals: { title: '자동 배치 결과', issues: @result_issues + @issues_info[:fixed_issues], virtual_ids: @result_issues.map(&:id) } %>
+      <div style="text-align: center; margin-top: 10px;">
+      <input type="submit" value="위 일정으로 확정" class="button" onclick="saveAutoSchedule()">
+    </div>
+<% else %>
+  <%= render :partial => 'milestone/gantt_chart', locals: { title: '일정', issues: @issues_info[:fixed_issues] } %>
+<% end %>
+
+<br>
+
+<h2>자동 배치할 일감: <span style="font-size: 14px; font-weight: normal; color: #666;">(추정시간이 기입되어야 자동 배치가 가능합니다)</span></h2>
+<%= render_issues( l(:label_sc_report_my_issues), @project, @issues_info[:candidate_issues], [:id, :status, :category, :assigned_to, :priority, :subject, :fixed_version, :estimated_hours_plus, :tags_relations] ) %>
+<div style="margin-top: 10px; text-align: center;">
+  <input type="submit" value="예상 결과 보기" class="button" onclick="autoScheduleIssues()">
+</div>

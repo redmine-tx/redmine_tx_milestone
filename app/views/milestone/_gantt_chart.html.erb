@@ -1,0 +1,433 @@
+  <%
+    @style_included ||= false
+    unless @style_included
+      @style_included = true
+  %>
+      <%= render :partial => 'milestone/gantt_style' %>      
+      
+      
+  <% end  %>
+
+<%
+  # 담당자 링크 캐싱 헬퍼 메소드
+  def cached_link_to_principal(principal, options = {})
+    @cached_principals ||= {}
+    principal_id = principal.is_a?(Principal) ? principal.id : principal
+    
+    unless @cached_principals.key?(principal_id)
+      if principal.is_a?(Principal)
+        @cached_principals[principal_id] = link_to_principal(principal, options)
+      else
+        principal_obj = Principal.find_by(id: principal_id)
+        @cached_principals[principal_id] = principal_obj ? link_to_principal(principal_obj, options) : principal_id.to_s
+      end
+    end
+    
+    @cached_principals[principal_id]
+  end
+
+  # 일감 상태에 따른 스타일 결정 헬퍼 메소드
+  def get_issue_style(issue)
+    if IssueStatus.is_postponed?(issue.status_id)
+      'color: #860;'
+    elsif IssueStatus.is_discarded?(issue.status_id)
+      'color: #aaa; text-decoration: line-through; opacity: 0.8;'
+    elsif IssueStatus.is_implemented?(issue.status_id)
+      'color: #aaa;'
+    elsif IssueStatus.is_in_progress?(issue.status_id)
+      'font-weight: bold;'
+    else
+      if issue.due_date && issue.due_date < Date.today
+        'color: #d55; font-weight: bold;'
+      else
+        'opacity: 0.8;'
+      end
+    end
+  end
+
+  gantt_opts ||= {}
+  date_marks ||= []
+  virtual_ids ||= []
+  
+  before_length = gantt_opts[:before_length] || 20.days
+  after_length = gantt_opts[:after_length] || 30.days
+
+  issue_link_url = gantt_opts[:issue_link_url] || '/issues/'
+
+  min_date = issues.map { |issue| [issue.start_date, issue.begin_time&.to_date] }.flatten.compact.min
+  before_length = [ (min_date ? (Date.today - min_date).days + 1.days : 15.days), 15.days ].max unless gantt_opts[:before_length]
+  
+  max_date = issues.map { |issue| [issue.due_date, issue.end_time&.to_date] }.flatten.compact.max
+  after_length = [ (max_date ? (max_date - Date.today).days + 5.days : 5.days), 5.days ].max unless gantt_opts[:after_length]
+  after_length = [ after_length, (due_date - Date.today).days + 5.days ].max if defined?(due_date) && due_date
+
+  cell_width = gantt_opts[:cell_width] || 18
+  cell_height = gantt_opts[:cell_height] || 18
+  title_width = gantt_opts[:title_width] || 400
+  person_width = gantt_opts[:person_width] || 90
+  show_status_history = gantt_opts[:show_status_history] || params[:show_status_history] || false
+
+  start_date = Date.today - before_length
+  end_date = Date.today + after_length
+  today_index = (Date.today - start_date).to_i
+  due_date_index = (due_date - start_date).to_i + 1 if defined?(due_date) && due_date
+  total_days = (end_date - start_date).to_i
+
+  depth_map = {}
+  depth_arr = []
+  _issues = issues.map.with_index { |issue, index|
+    show_no_due_date_warning = issue.due_date.nil? && !Tracker.is_exception?( issue.tracker_id ) && !IssueStatus.is_implemented?( issue.status_id )
+
+    # depth 계산
+    depth = if index > 0 then
+      prev_issue = issues[index - 1]
+      if issue.parent_id == prev_issue.id
+        # 이전 이슈가 내 부모인 경우
+        depth_map[issue.parent_id].to_i + 1
+      elsif issue.parent_id == prev_issue.parent_id
+        # 이전 이슈와 같은 부모를 가진 경우
+        depth_map[prev_issue.id].to_i
+      else
+        # 이전 이슈와 관계가 없는 경우
+        if depth_map[issue.parent_id]
+          depth_map[issue.parent_id].to_i + 1
+        else
+          0
+        end
+      end      
+    else
+      0
+    end
+
+    depth_arr.push(depth)
+    depth_map[issue.id] = depth
+
+    {
+      issue: issue,
+      depth: depth,
+      show_no_due_date_warning: show_no_due_date_warning
+      #tooltip: _generate_issue_tooltip(issue)
+    }
+  }
+
+  holidays = []
+  if defined?(Holiday)
+    holidays = Holiday.for_date_range( start_date, end_date )
+  end
+%>
+
+<% gantt_container_id = "gantt-container-#{rand(1000000)}" %>
+
+<div class="gantt-wrapper mouseover-wrapper-<%=gantt_container_id%>" style="display: flex; position: relative;">
+  <div class="cursor-container-<%=gantt_container_id%>" style="top: 36px; height: <%=cell_height%>px;"></div>
+  
+  <div class="gantt-info-container" style="flex-shrink: 0; border: 1px solid #ccc;">
+
+    <div class="gantt-grid" style="grid-template-columns: <%=title_width%>px <%=person_width%>px;">
+
+        <div class="task-name" style="height: <%=cell_height*2+1%>px;"><span class="task-name-text"><%= title ? title : '일감' %></span></div>
+        <% if gantt_opts[:hide_assignee] != true %>
+            <div class="assignee" style="left: <%=title_width%>px;">담당자</div>
+        <% end %>
+
+        
+          <% _issues.each_with_index do |_issue, index| %>
+
+            <%
+            issue = _issue[:issue]
+            depth = _issue[:depth]
+            show_no_due_date_warning = _issue[:show_no_due_date_warning]
+            %>
+
+            <div id="issue-<%= issue.id %>" class="task-row mouseover-<%=gantt_container_id%> hascontextmenu">
+
+                <div class="task-name priority-<%= issue.priority_id %>" style="height: <%=cell_height%>px;">
+                <% subject_style = get_issue_style(issue) %>
+
+                <% if depth > 0 then %>
+                    <span style="margin-left: <%=depth * 10%>px; color: #aaa;">▸ </span>
+                <% end %>
+
+                <% if virtual_ids.include?(issue.id) then %>
+                    <span style="color: #000; font-weight: bold;">✨ </span>
+                <% end %>
+
+                <% if IssueStatus.is_postponed?(issue.status_id) && !Tracker.is_exception?( issue.tracker_id ) then %>
+                    <i class='fas fa-hourglass-half warning-icon' style='color: #860;'> </i>
+                <% end %>
+
+                <% if show_no_due_date_warning then %>
+                    <i class='fas fa-circle-question warning-icon' style='color: #f99;'> </i>
+                <% end %>
+
+                <% if IssueStatus.is_discarded?(issue.status_id) then %>            
+                    <span style="color: #666; font-weight: bold;">🗑️</span>
+                <% elsif IssueStatus.is_implemented?(issue.status_id) then %>
+                    <span style="color: #0c0; font-weight: bold;">✓</span>
+                <% elsif IssueStatus.is_in_review?(issue.status_id) then %>
+                    🔍
+                <% end %>
+                <span class="issue-subject-link" style="<%= subject_style %>"><%= link_to "##{issue.id}", "/projects/#{ @project ? @project.identifier : issue.project.identifier }/milestone/gantt/issues/#{issue.id}" %> <%= link_to "#{issue.subject}".html_safe, gantt_opts[:issue_link_url] ? gantt_opts[:issue_link_url] + issue.id.to_s : issue_path(issue) %></span>
+
+                </div>
+                <% if gantt_opts[:hide_assignee] != true %>
+                <div class="assignee priority-<%= issue.priority_id %>" style="left: <%=title_width%>px; height: <%=cell_height%>px;"><%= cached_link_to_principal(issue.assigned_to) if issue.assigned_to %></div>
+                <% end %>        
+            </div>
+          <% end %>
+        
+    </div>
+  </div>
+  
+  <div id="<%= gantt_container_id %>" class="gantt-container" style='border: 1px solid #ccc;'>
+    <div class="gantt-grid" style="grid-template-columns: repeat(<%=total_days+1%>, <%=cell_width%>px);">
+      <!-- 월 헤더 -->
+      <% 
+        current_month = nil
+        month_cell_count = 0
+        
+        (start_date..end_date).each do |date|
+          if current_month != date.month
+            if current_month
+      %>
+              <div class="month-header" style="grid-column: span <%= month_cell_count %>; white-space: nowrap;"><%= current_month %>월</div>
+      <%
+            end
+            current_month = date.month
+            month_cell_count = 1
+          else
+            month_cell_count += 1
+          end
+          
+          if date == end_date
+      %>
+            <div class="month-header" style="grid-column: span <%= month_cell_count %>;"><%= current_month %>월</div>
+      <%  
+          end
+        end 
+      %>
+
+      <!-- 날짜 헤더 -->
+      <% (start_date..end_date).each do |date| %>
+        <div class="date-header">
+          <span class="date-header-text">
+
+            <font color="<%= date.sunday? ? 'red' : date.saturday? ? 'blue' : 'black' %>"><%= date.day %></font>
+
+            <% if date.sunday? || holidays[date] %>
+              <div class="highlight-column" style="width: <%=cell_width%>px; top: <%=cell_height + 1 %>px; left: <%= ((date - start_date).to_i * cell_width) %>px; background-color: rgba(255, 0, 0, 0.1);"></div>
+            <% end %>
+            <% if date.saturday? %>
+              <div class="highlight-column" style="width: <%=cell_width%>px; top: <%=cell_height + 1 %>px; left: <%= ((date - start_date).to_i * cell_width) %>px; background-color: rgba(0, 80, 255, 0.1);"></div>
+            <% end %>
+
+            <% vacation = ( ( defined?(user) && defined?(vacation_info) && vacation_info && vacation_info[date] ) ? vacation_info[date].select{ |k, v| k == user.login }[ user.login ] : nil ) %>
+            <% if vacation then
+
+                 vacation_left_margin = 0
+                 vacation_width = cell_width
+
+                 if vacation[:status] == "오전반차" then
+                   vacation_width = vacation_width / 2
+                 elsif vacation[:status] == "오후반차" then
+                   vacation_left_margin = cell_width / 2
+                   vacation_width = vacation_width / 2
+                 end
+             %>
+              <div class="highlight-column" style="left: <%= vacation_left_margin + ((date - start_date).to_i * cell_width) %>px; top: <%=cell_height + 1 %>px; width: <%= vacation_width %>px; background-color: rgba(0, 0, 0, 0.1);"></div>
+            <% end %>
+
+          </span>
+        </div>
+      <% end %>
+
+      <!-- 오늘 날짜 표시선 -->
+      <div class="today-column" style="left: <%= (today_index * cell_width) %>px; top: <%=cell_height + 1 %>px;"></div>
+      <div class="today-column" style="left: <%= (today_index * cell_width) + cell_width %>px; top: <%=cell_height + 1 %>px;"></div>
+      <% if defined?(due_date) && due_date %>
+        <div class="blocked-grid" style="left: <%= (due_date_index * cell_width) %>px; top: <%=cell_height + 1 %>px; width: <%= cell_width * ( ( end_date - due_date ).to_i )  %>px;"></div>
+      <% end %>
+
+      <% if date_marks.any? then %>
+        <% date_marks.each_with_index do |data, index|
+          _value = data[:name]
+          _date = data[:date]
+          %>
+          <% mark_index = ( _date - start_date ).to_i + 1 %>
+            <div class="mark-text" style="left: <%= 3 + (mark_index * cell_width) %>px; top: <%= index * cell_height + cell_height * 2.2 %>px;"><%= _value %></div>
+            <div class="mark-column" style="left: <%= (mark_index * cell_width) %>px;top: <%=cell_height + 1 %>px"></div>
+        <% end %>
+      <% end %>
+
+      <% _issues.each_with_index do |_issue, index| %>
+        <%
+          issue = _issue[:issue]
+          depth = _issue[:depth]
+          show_no_due_date_warning = _issue[:show_no_due_date_warning]
+        %>     
+
+        <div class="task-row mouseover-<%=gantt_container_id%>">
+          <%
+            issue_expected_start_date = issue.start_date ? issue.start_date.to_date : -Date::Infinity.new
+            issue_expected_due_date = issue.due_date ? issue.due_date.to_date : Date::Infinity.new
+
+            issue_begin_date = issue.begin_time ? issue.begin_time.to_date : nil
+            issue_end_date = issue.end_time ? issue.end_time.to_date : Date.today
+
+            issue_progress_status_history = if show_status_history then
+                                                  issue.status_history.map{ |datetime, status_id|
+                                                    status = IssueStatus.find_by(id: status_id)
+                                                    [ datetime.to_date, status ? status.name : '?' ]
+                                                   }.to_h
+                                              else
+                                                  {}
+                                              end
+          %>
+
+          <%
+            show_line = !Tracker.is_exception?( issue.tracker_id ) && ( ( issue.due_date && issue.due_date >= start_date ) || ( issue.start_date && issue.due_date.nil? ) || ( issue.start_date && issue.start_date >= start_date && issue.start_date <= end_date ) )
+            show_line_before = ( issue.start_date && issue.start_date >= start_date )
+            show_line_after = ( issue.due_date && issue.due_date <= end_date )
+            line_start_date = if issue.start_date && issue.start_date < start_date then
+                                start_date
+                              else
+                                issue.start_date
+                              end
+            line_end_date = if issue.due_date && issue.due_date >= start_date then
+                              issue.due_date
+                            else
+                              end_date
+                            end
+
+            if line_start_date.nil? && line_end_date
+              line_start_date = issue_begin_date && !IssueStatus.is_implemented?( issue.status_id ) ? issue_begin_date : line_end_date
+            end
+
+            line_width = line_start_date ? ( [ line_end_date, end_date ].min - line_start_date + 1 ).to_i * cell_width : cell_width
+
+            tooltip_begin_date = [ issue_begin_date, line_start_date ].compact.min
+            tooltip_end_date = [ issue_end_date, line_end_date ].compact.max
+          %>
+          
+          <% (start_date..end_date).each do |date| %>
+            <% has_tooltip = tooltip_begin_date && tooltip_end_date && ( ( date >= tooltip_begin_date && date <= tooltip_end_date) || date == line_start_date || date == line_end_date ) %>
+            <div class="task-cell<%= show_no_due_date_warning ? ' n' : '' %> <%= has_tooltip ? 'hascontextmenu' : '' %>" style="height: <%=cell_height%>px; position: relative;" id="issue-<%= issue.id %>">
+              <!-- 작업완료 or 작업중 이슈 -->
+              <% if date == issue_begin_date || ( issue_begin_date && date == start_date && issue_begin_date < start_date && issue_end_date >= start_date ) then%>
+                <%
+                  #debug[:date] = date.strftime( '%Y-%m-%d' )
+
+                  bar_width = if issue_begin_date != issue_end_date then
+                                [1,  ( issue_end_date - date + 1 ).to_i ].max * cell_width
+                              else
+                                if issue.end_time.nil?
+                                  cell_width
+                                else
+                                  if ( issue.end_time - issue.begin_time ) >= 4.hour then
+                                    cell_width
+                                  elsif ( issue.end_time - issue.begin_time ) >= 1.hour then
+                                    ( cell_width * 0.5 ).to_i
+                                  else
+                                    3
+                                  end
+                                end
+                              end
+                %>
+                <% if !Tracker.is_exception?( issue.tracker_id ) then %>
+                  <div class="task-bar<%= IssueStatus.is_implemented?( issue.status_id ) ? ' completed' : '' %><%= IssueStatus.is_in_review?( issue.status_id ) ? ' confirm' : '' %>" style="width: <%= bar_width %>px; height: <%=cell_height-4%>px; position: absolute; left: 0; z-index: 1;">
+                    <% if IssueStatus.is_in_progress?( issue.status_id ) %>
+                      <div class="task-bar-progress<%= IssueStatus.is_in_review?( issue.status_id ) ? ' confirm' : '' %>" style="width: <%= issue.done_ratio %>%;"></div>
+                    <% end %>
+                  </div>
+                <% end %>
+              <% end %>
+
+              <% if issue.tip && !virtual_ids.include?(issue.id) && date == [ ( issue.due_date ? issue.due_date : Date.today - 100.years ), ( issue.end_time ? issue.end_time.to_date : Date.today - 100.years ), ( issue.end_time.nil? && issue.begin_time ? Date.today : Date.today - 100.years ) ].max %>
+                <div style="font-weight: bold; z-index: 10; font-size: 10px; color: #f66; position: absolute; bottom: 0; left: <%= cell_width + 2 %>px; display: inline-block; width: 1000%; text-align: left;"><%=issue.tip%></div>
+              <% end %>
+
+              <% if show_status_history && date < issue_end_date && issue_progress_status_history[date] && ( issue_begin_date == nil || issue_begin_date < date ) %>
+                <div style="font-weight: bold; z-index: 10; font-size: 8px; color: #000; position: absolute; bottom: 0; left: <%= 2 %>px; display: inline-block; width: 1000%; text-align: left;"><%=issue_progress_status_history[date]%></div>
+              <% end %>
+
+              <!-- 예정 이슈 -->
+              <% if show_line && date == line_start_date %>
+                <div class="arrow-line<%= show_line_before ? ' show-before' : '' %> <%= show_line_after ? ' show-after' : '' %>" style="width: <%=line_width %>px; top: <%= cell_height -3 %>px;<% if defined?(virtual_ids) && virtual_ids.include?(issue.id) %> background-color: #fa0;<% end %>"></div>
+              <% end %>
+
+            </div>
+          <% end %>
+        </div>
+      <% end %>
+
+    </div>
+  </div>
+</div>
+
+<%# end %>
+
+<script>
+  $(document).ready(function() {
+  
+    // 오늘 날짜로 간트 스크롤
+    var startDate = new Date( "<%= start_date.strftime( '%Y-%m-%d' ) %>" );
+    var endDate = new Date( "<%= end_date.strftime( '%Y-%m-%d' ) %>" );
+    var today = new Date();
+    var totalDays = (endDate - startDate) / (1000 * 60 * 60 * 24);
+    var daysFromStart = (today - startDate) / (1000 * 60 * 60 * 24);
+    var cellWidth = <%= cell_width %>;
+    var scrollPosition = ( daysFromStart - 25 ) * cellWidth;
+    $('#<%= gantt_container_id %>').scrollLeft(scrollPosition);
+
+    // 행 하이라이트 기능
+    var cursorContainer = $('.cursor-container-<%=gantt_container_id%>');
+    var ganttWrapper = $('.mouseover-wrapper-<%=gantt_container_id%>');
+    
+    var handler = function() {
+      var $this = $(this);
+      var currentWrapper = $this.closest('.mouseover-wrapper-<%=gantt_container_id%>');
+      var rows = currentWrapper.find('.mouseover-<%=gantt_container_id%>');
+      var rowIndex = rows.index(this);
+      
+      // 좌측 정보 영역과 우측 간트 차트 영역의 행을 구분
+      if( rowIndex >= rows.length/2 ) rowIndex = rowIndex - rows.length/2;
+      
+      // 현재 간트차트 내의 요소들만 선택
+      var taskNameElements = currentWrapper.find('.gantt-info-container .task-name');
+      if (taskNameElements.length > rowIndex + 1) { // +1은 헤더 제외
+        var targetElement = taskNameElements.eq(rowIndex + 1);
+        var wrapperOffset = currentWrapper.offset();
+        var elementOffset = targetElement.offset();
+        
+        if (wrapperOffset && elementOffset) {
+          var rowTop = elementOffset.top - wrapperOffset.top;
+          cursorContainer.css({
+            'top': rowTop + 'px',
+            'height': '<%=cell_height%>px',
+            'display': 'block'
+          });
+          return;
+        }
+      }
+      
+      // 두 번째 시도: 현재 간트차트 기준으로 fallback
+      var headerHeight = currentWrapper.find('.gantt-info-container .task-name').first().outerHeight() || <%=cell_height*2%>;
+      var cellHeight = <%=cell_height%>;
+      var rowTop = headerHeight + (rowIndex * cellHeight);
+      
+      cursorContainer.css({
+        'top': rowTop + 'px',
+        'height': cellHeight + 'px',
+        'display': 'block'
+      });
+    }
+    $('.mouseover-<%=gantt_container_id%>').on('mouseenter', handler);
+    $('.mouseover-wrapper-<%=gantt_container_id%>').on('mouseleave', function() {
+      $('.cursor-container-<%=gantt_container_id%>').css('display', 'none');
+    });
+  
+  // 툴팁 기능
+  //setupTooltip();
+  
+});
+</script>

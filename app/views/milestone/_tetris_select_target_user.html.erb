@@ -1,0 +1,59 @@
+<!-- 그룹 탭 리스트 -->
+<div class="tabs">
+  <ul>
+    <% @groups.each { |group, info| %>
+      <li><%= link_to(group.name, "#group-#{group.id}", class: (params[:group_id] == group.id.to_s ? 'selected' : '')) %></li>
+    <% } %>
+  </ul>
+</div>
+
+<% @groups.each { |group, info| %>
+  <h2 id="group-<%= group.id %>"><%= group.name %></h2>
+  <table class="list">
+    <thead>
+      <tr>
+        <th>사용자명</th>
+        <th>일정 확정 일감</th>
+        <th>일정 미확정 일감</th>
+        <th>추정 작업 시간 기재된 일감</th>
+        <th>액션</th>
+      </tr>
+    </thead>
+    <tbody>
+      <% info[:user_infos].each { |user_info| user = user_info[:user]; info = user_info[:issue_info] %>
+         <tr class="<%= cycle('odd', 'even') %>">
+           <td><%= link_to_principal(user) %></td>          
+           <td>
+             <% if info[:fixed_issues].count == 0 %>
+               <span style="color: red; font-weight: bold;"><%= info[:fixed_issues].count %></span>
+             <% else %>
+               <%= info[:fixed_issues].count %>
+             <% end %>
+           </td>
+           <td>
+             <% if info[:other_issues].count >= 10 %>
+               <span style="color: red; font-weight: bold;"><%= info[:other_issues].count %></span>
+             <% else %>
+               <%= info[:other_issues].count %>
+             <% end %>
+           </td>
+           <td>
+             <% if info[:candidate_issues].count == 0 %>
+               <span style="color: #999;"><%= info[:candidate_issues].count %></span>
+             <% else %>
+               <%= info[:candidate_issues].count %>
+             <% end %>
+           </td>
+           <td>
+             <% if info[:candidate_issues].count > 0 %>
+               <%= link_to("자동배치", "tetris/users/#{user.id}", class: "button button-small") %>
+             <% else %>
+               <span class="button button-small disabled" style="color: #999; cursor: not-allowed;">자동배치</span>
+             <% end %>
+           </td>
+         </tr>
+      <% } %>
+    </tbody>
+  </table>
+  <br>
+<% } %>

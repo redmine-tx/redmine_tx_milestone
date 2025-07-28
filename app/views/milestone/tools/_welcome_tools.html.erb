@@ -1,0 +1,119 @@
+<div class="milestone-welcome">
+  <div class="box">
+    <h3>🔧 검증 도구 모음</h3>
+    <p>프로젝트 일관성을 유지하기 위한 검증 도구 모음입니다. 데이터의 정확성을 보장하고 문제점을 사전에 식별하여 프로젝트 관리의 품질을 높입니다.</p>
+    
+    <div class="milestone-features">
+      <div class="feature-item">
+        <h4><%= link_to '🔗 목표버전 검증', '/projects/' + params[:project_id].to_s + '/milestone/tools/validate', class: 'feature-link' %></h4>
+        <p>부모 일감과 자식 일감 간의 목표버전 불일치를 검증합니다. 상위-하위 일감 간의 목표버전이 일치하지 않는 경우를 찾아내어 프로젝트 구조의 일관성을 유지할 수 있습니다.</p>
+      </div>
+
+      <div class="feature-item">
+        <h4><%= link_to '📅 일정 동기화', '/projects/' + params[:project_id].to_s + '/milestone/tools/sync_parent_date', class: 'feature-link' %></h4>
+        <p>상위-하위 일감 간의 일정을 동기화합니다. 부모 일감의 일정이 자식 일감의 일정과 맞지 않는 경우를 자동으로 감지하고 수정하여 프로젝트 일정의 정확성을 보장합니다.</p>
+      </div>
+
+      <div class="feature-item">
+        <h4><%= link_to '🕒 연기 일감 조회', '/projects/' + params[:project_id].to_s + '/milestone/tools/delayed_issues', class: 'feature-link' %></h4>
+        <p>최초 설정한 완료일이 뒤로 밀린 일감들을 조회합니다.</p>
+      </div>
+    </div>
+
+    <div class="getting-started">
+      <h4>🚀 시작하기</h4>
+      <p>상단 탭에서 각 검증 도구를 선택하여 프로젝트 데이터의 정확성을 확인하세요. 정기적인 검증을 통해 프로젝트 관리의 품질을 높일 수 있습니다.</p>
+    </div>
+  </div>
+</div>
+
+<style>
+.milestone-welcome {
+  margin: 10px 0;
+}
+
+.milestone-welcome .box {
+  padding: 20px;
+  background: #f8f9fa;
+  border-radius: 8px;
+  border: 1px solid #e9ecef;
+}
+
+.milestone-welcome h3 {
+  color: #495057;
+  margin-bottom: 15px;
+  font-size: 1.4em;
+}
+
+.milestone-features {
+  display: grid;
+  gap: 15px;
+  margin: 20px 0;
+}
+
+.feature-item {
+  background: white;
+  padding: 15px;
+  border-radius: 6px;
+  border-left: 4px solid #007bff;
+  box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+}
+
+.feature-item h4 {
+  color: #007bff;
+  margin-bottom: 8px;
+  font-size: 1.1em;
+}
+
+.feature-link {
+  color: #007bff;
+  text-decoration: none;
+  transition: color 0.3s ease;
+}
+
+.feature-link:hover {
+  color: #0056b3;
+  text-decoration: none;
+}
+
+.feature-link:visited {
+  color: #007bff;
+}
+
+.feature-item p {
+  color: #6c757d;
+  line-height: 1.5;
+  margin: 0;
+  font-size: 0.95em;
+}
+
+.getting-started {
+  background: #e7f3ff;
+  padding: 15px;
+  border-radius: 6px;
+  margin-top: 20px;
+  border: 1px solid #b8daff;
+}
+
+.getting-started h4 {
+  color: #004085;
+  margin-bottom: 8px;
+}
+
+.getting-started p {
+  color: #004085;
+  margin: 0;
+  font-weight: 500;
+}
+
+@media (max-width: 768px) {
+  .milestone-welcome .box {
+    padding: 15px;
+  }
+  
+  .feature-item {
+    padding: 12px;
+  }
+}
+</style>
+
