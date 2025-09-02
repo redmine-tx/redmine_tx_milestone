@@ -26,7 +26,8 @@ class RoadmapData < ApplicationRecord
   end
   
   # 프로젝트별 활성 로드맵 가져오기
-  def self.active_for_project(project_id)
-    where(project_id: project_id, is_active: true).order(updated_at: :desc).first
+  def self.active_for_project(project_id, name = 'Default')
+    roadmaps = where(project_id: project_id, is_active: true, name: name).order(updated_at: :desc)
+    roadmaps.first
   end
 end 

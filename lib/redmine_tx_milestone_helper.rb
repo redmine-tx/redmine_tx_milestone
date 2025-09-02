@@ -64,7 +64,21 @@ EOS
           v1 = Setting[:plugin_redmine_tx_milestone]["setting_milestone_days_#{i}"]
           v2 = Setting[:plugin_redmine_tx_milestone]["setting_milestone_title_#{i}"]
           next if v1 == '' || v1 == nil
-          date_marks.push({ date: (effective_date - v1.to_i.days).to_date, name: v2 })
+
+          date = (effective_date - v1.to_i.days).to_date
+
+          date_marks.push({ date: , name: v2 })
+      end
+
+      # 데이터 타입이 날짜 타입인 커스텀 필드가 있으면 해당 값도 추가
+      self.custom_field_values.each do |custom_field_value|
+        if custom_field_value.custom_field.field_format == 'date' && custom_field_value.value.present?
+          date_marks.delete_if { |dm| dm[:name] == custom_field_value.custom_field.name }
+          date_marks.push({ 
+            date: custom_field_value.value.to_date, 
+            name: custom_field_value.custom_field.name 
+          })
+        end
       end
 
       date_marks

@@ -23,6 +23,7 @@ resources :projects do
       get 'roadmap', to: 'milestone#roadmap'
       post 'save_roadmap_data', to: 'milestone#save_roadmap_data'
       get 'load_roadmap_data', to: 'milestone#load_roadmap_data'
+      post 'create_roadmap', to: 'milestone#create_roadmap'
       post 'tetris/users/:user_id', to: 'milestone#tetris'
       post 'tetris/issues/:parent_issue_id', to: 'milestone#tetris'
       post 'tetris', to: 'milestone#tetris'
@@ -30,6 +31,7 @@ resources :projects do
       get 'tools/validate', to: 'milestone#tools', tool: 'validate'
       get 'tools/sync_parent_date', to: 'milestone#tools', tool: 'sync_parent_date'
       get 'tools/delayed_issues', to: 'milestone#tools', tool: 'delayed_issues'
+      get 'tools/check_related_issues', to: 'milestone#tools', tool: 'check_related_issues'
       get 'report', to: 'milestone#report'
       # 기존 issue_detail 라우트는 제거됨
     end

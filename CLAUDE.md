@@ -69,7 +69,7 @@ Routes are defined in `config/routes.rb` with nested project resources:
 Plugin settings are managed through Redmine's plugin settings system:
 - Milestone deadline warnings (1-5 configurable periods)
 - Auto-scheduling behavior toggles
-- Dependencies on other TX plugins (`redmine_tx_0_base`, `redmine_tx_advanced_issue_status`, etc.)
+- Dependencies on other TX plugins (`redmine_tx_advanced_issue_status`, etc.)
 
 ### Database
 
@@ -78,7 +78,6 @@ The plugin includes migration `001_create_roadmap_data.rb` to create the `roadma
 ## Dependencies
 
 This plugin requires several other TX plugins:
-- `redmine_tx_0_base` (>= 0.0.1)
 - `redmine_tx_advanced_issue_status` (>= 0.0.1) 
 - `redmine_tx_advanced_tracker` (>= 0.0.1)
 

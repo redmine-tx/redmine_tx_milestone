@@ -76,7 +76,7 @@ document.addEventListener('DOMContentLoaded', function() {
 
 <% users.each do |user| %>
   <div style="border: 1px solid #ccc; padding: 15px; margin-bottom: 20px; border-radius: 4px;">
-    <h2><%= user.name %></h2>
+    <h2 style="display: inline-block; right-margin: 10px;"><%= link_to_principal user %></h2> <%= link_to '작업내역', "/activity?show_issues=1&with_subprojects=1&user_id=#{user.id}", target: '_blank' %> | <%= link_to '내페이지', "/my/page?user_id=#{user.id}", target: '_blank' %>
     <%= render :partial => 'milestone/user_detail', locals: { user: user, vacation_info: vacation_info } %>
   </div>
 <% end %>

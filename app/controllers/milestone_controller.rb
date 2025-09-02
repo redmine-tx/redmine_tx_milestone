@@ -97,84 +97,16 @@ class MilestoneController < ApplicationController
 
     def roadmap
       # DB에서 로드맵 데이터 불러오기
+      @roadmap_names = RoadmapData.where( project_id: @project.id ).pluck(:name).uniq
       @roadmap_data = RoadmapData.active_for_project(@project.id)
       
       if @roadmap_data && @roadmap_data.categories.any?
         # DB에서 불러온 데이터 사용
-        @all_projects = @roadmap_data.categories.map do |category|
-          {
-            category: category['name'] || '미분류',
-            customColor: category['customColor'], # 카테고리 색상 정보 추가
-            events: (category['events'] || []).map do |event|
-              {
-                name: event['name'] || '이름 없음',
-                schedules: (event['schedules'] || []).map do |schedule|
-                  begin
-                    start_date = nil
-                    end_date = nil
-                    
-                    # 날짜 파싱 시 예외 처리
-                    if schedule['startDate'].present?
-                      start_date = Date.parse(schedule['startDate']) rescue nil
-                    end
-                    
-                    if schedule['endDate'].present?
-                      end_date = Date.parse(schedule['endDate']) rescue nil
-                    end
-                    
-                    {
-                      name: schedule['name'] || '일정 없음',
-                      start_date: start_date,
-                      end_date: end_date,
-                      status: schedule['status'] || 'planning'
-                    }
-                  rescue => e
-                    Rails.logger.warn "스케줄 파싱 오류: #{e.message}, 스케줄: #{schedule}"
-                    {
-                      name: schedule['name'] || '일정 없음',
-                      start_date: nil,
-                      end_date: nil,
-                      status: schedule['status'] || 'planning'
-                    }
-                  end
-                end.compact
-              }
-            end.compact
-          }
-        end.compact
+        formatted_categories = format_roadmap_categories(@roadmap_data)
+        @all_roadmaps = build_roadmap_response_data(@roadmap_data, formatted_categories, "Redmine 로드맵 데이터", @roadmap_data.name)
       else
         # DB에 데이터가 없으면 기본 예제 데이터 사용
-        @all_projects = [
-          { 
-            category: '가챠', 
-            events: [
-              {
-                name: "미국",
-                schedules: [
-                  { name: "미국 출장 1차", start_date: Date.new(2025, 7, 1), end_date: Date.new(2025, 7, 15), status: "in-progress" },
-                  { name: "미국 파트너십 미팅", start_date: Date.new(2025, 6, 20), end_date: Date.new(2025, 6, 25), status: "planning" }
-                ]
-              },
-              {
-                name: "일본",
-                schedules: [
-                  { name: "일본 현지조사", start_date: Date.new(2025, 10, 5), end_date: Date.new(2025, 10, 20), status: "planning" }
-                ]
-              }
-            ]
-          },
-          { 
-            category: '이벤트', 
-            events: [
-              {
-                name: "일반인",
-                schedules: [
-                  { name: "일반 사용자 교육", start_date: Date.new(2025, 10, 2), end_date: Date.new(2025, 10, 16), status: "review" }
-                ]
-              }
-            ]
-          }
-        ]
+        @all_roadmaps = build_default_roadmap_data("Redmine 로드맵 기본 데이터", @roadmap_data.name)
       end
     end
 
@@ -222,12 +154,12 @@ class MilestoneController < ApplicationController
         
         # 자동 배치 요청한 이슈들 취합
         issue_ids = params[:issue_ids].split(',').map(&:to_i)
-        issues = Issue.where(id: issue_ids)
+        target_issues = issues.select { |issue| issue_ids.include?( issue.id ) }  # target_issues 는 issues 의 객체와 동일한 객체를 참조해야함. 새로운 인스턴스를 만들면 일정 꼬임.
 
         # 자동 재배치
-        auto_schedule_issues( issues, assign_from_date )
+        auto_schedule_issues( issues, target_issues, assign_from_date )
 
-        @result_issues = issues
+        @result_issues = target_issues
 
         flash[:notice] = "#{issues.count}개 일감의 일정을 아래와 같이 제안 합니다.<br>저장하시려면 위 일정으로 확정 버튼을 클릭해 주세요.".html_safe
         
@@ -296,6 +228,7 @@ class MilestoneController < ApplicationController
   def save_roadmap_data
     begin
       # JSON 데이터 파싱 및 검증
+      name = params[:name] || "Default"
       data = JSON.parse(params[:roadmap_data])
       
       # 데이터 유효성 검사
@@ -306,12 +239,13 @@ class MilestoneController < ApplicationController
       # 프로젝트별 공용 로드맵 찾기 또는 생성
       roadmap_data = RoadmapData.find_or_initialize_by(
         project_id: @project.id,
+        name: name,
         is_active: true
       )
       
       # 기존 레코드가 있으면 업데이트, 없으면 새로 생성
       roadmap_data.assign_attributes(
-        name: params[:name] || "#{@project.name} Roadmap",
+        name: name,
         data: data.to_json,
         is_active: true
       )
@@ -349,81 +283,87 @@ class MilestoneController < ApplicationController
     end
   end
 
-  # 로드맵 데이터 불러오기 API
-  def load_roadmap_data
-    begin
-      roadmap_data = RoadmapData.active_for_project(@project.id)
+# 로드맵 데이터 불러오기 API
+def load_roadmap_data
+  begin
+    roadmap_data = RoadmapData.active_for_project(@project.id, params[:name])
+
+    pp roadmap_data
       
-      if roadmap_data && roadmap_data.categories.any?
-        # @all_projects와 동일한 구조로 변환하여 반환
-        formatted_data = roadmap_data.categories.map do |category|
-          {
-            category: category['name'] || '미분류',
-            customColor: category['customColor'], # 카테고리 색상 정보 포함
-            events: (category['events'] || []).map do |event|
-              {
-                name: event['name'] || '이름 없음',
-                schedules: (event['schedules'] || []).map do |schedule|
-                  begin
-                    start_date = nil
-                    end_date = nil
-                    
-                    # 날짜 파싱 시 예외 처리
-                    if schedule['startDate'].present?
-                      start_date = Date.parse(schedule['startDate']) rescue nil
-                    end
-                    
-                    if schedule['endDate'].present?
-                      end_date = Date.parse(schedule['endDate']) rescue nil
-                    end
-                    
-                    {
-                      name: schedule['name'] || '일정 없음',
-                      start_date: start_date,
-                      end_date: end_date,
-                      status: schedule['status'] || 'planning'
-                    }
-                  rescue => e
-                    Rails.logger.warn "스케줄 파싱 오류: #{e.message}, 스케줄: #{schedule}"
-                    {
-                      name: schedule['name'] || '일정 없음',
-                      start_date: nil,
-                      end_date: nil,
-                      status: schedule['status'] || 'planning'
-                    }
-                  end
-                end.compact
-              }
-            end.compact
-          }
-        end.compact
-        
-        render json: {
-          success: true,
-          data: formatted_data,
-          categories: formatted_data.map { |project| 
-            {
-              name: project[:category],
-              customColor: project[:customColor]
-            }
-          },
-          updated_at: roadmap_data.updated_at
-        }
-      else
-        render json: {
-          success: false,
-          message: '저장된 로드맵 데이터가 없습니다.'
-        }, status: :not_found
-      end
+    if roadmap_data && roadmap_data.categories.class == Array
+      # JSON 파일과 동일한 형식으로 변환
+      formatted_categories = format_roadmap_categories(roadmap_data)
+      data = build_roadmap_response_data(roadmap_data, formatted_categories, "서버에서 로드한 Redmine 로드맵 데이터", roadmap_data.name)
       
-    rescue => e
-      Rails.logger.error "로드맵 데이터 로드 오류: #{e.message}"
+        # JSON 파일과 동일한 형식으로 반환
+      render json: {
+        success: true,
+        name: roadmap_data.name,
+        data: data
+      }
+    else
       render json: {
         success: false,
-        message: '데이터 로드 중 오류가 발생했습니다.'
-      }, status: :internal_server_error
+        message: '저장된 로드맵 데이터가 없습니다.'
+      }, status: :not_found
     end
+    
+  rescue => e
+    Rails.logger.error "로드맵 데이터 로드 오류: #{e.message}"
+    render json: {
+      success: false,
+      message: '데이터 로드 중 오류가 발생했습니다.'
+    }, status: :internal_server_error
   end
+end
+
+# 새 로드맵 생성 액션
+def create_roadmap
+  begin
+    # 파라미터 검증
+    name = params[:name]&.strip
+    
+    if name.blank?
+      render json: {
+        success: false,
+        message: '로드맵 이름을 입력해주세요.'
+      }, status: :bad_request
+      return
+    end
+    
+    # 중복 이름 체크
+    existing_roadmap = RoadmapData.where(project_id: @project.id, name: name, is_active: true).first
+    if existing_roadmap
+      render json: {
+        success: false,
+        message: '이미 같은 이름의 로드맵이 존재합니다.'
+      }, status: :conflict
+      return
+    end
+    
+    # 새 로드맵 생성
+    roadmap_data = RoadmapData.create!(
+      project_id: @project.id,
+      name: name,
+      is_active: true,
+      data: build_default_roadmap_data( "Redmine 로드맵 데이터", name ).to_json
+    )
+    
+    render json: {
+      success: true,
+      message: "새 로드맵 '#{name}'이 성공적으로 생성되었습니다.",
+      roadmap_id: roadmap_data.id,
+      name: roadmap_data.name
+    }
+    
+  rescue => e
+    Rails.logger.error "새 로드맵 생성 오류: #{e.message}"
+    render json: {
+      success: false,
+      message: '로드맵 생성 중 오류가 발생했습니다.'
+    }, status: :internal_server_error
+  end
+end
   
     private
 
@@ -449,13 +389,13 @@ class MilestoneController < ApplicationController
 
      
 
-    def auto_schedule_issues( issues, assign_from_date = Date.today )
+    def auto_schedule_issues( all_issues, target_issues, assign_from_date = Date.today )
 
       # 이미 일정이 배치된 날짜들 정보를 정리해 둔다
-      all_blocked_dates = Issue.blocked_dates_map_per_assignee( issues )
+      all_blocked_dates = Issue.blocked_dates_map_per_assignee( all_issues )
 
       # 1. priority가 큰 순서부터 정렬 (priority_id가 클수록 높은 우선순위)
-      priority_sorted_issues = issues.sort_by do |issue|
+      priority_sorted_issues = target_issues.sort_by do |issue|
         [
           ( issue.fixed_version&.effective_date || assign_from_date + 10.years ),
           -(issue.priority_id || 0),
@@ -468,7 +408,7 @@ class MilestoneController < ApplicationController
       sorted_issues = Issue.topological_sort(priority_sorted_issues)
       Rails.logger.info "[RedmineTxMilestone] sorted_issues: #{sorted_issues.map { |issue| issue.id }}"
 
-      assigned_to_ids = issues.map { |issue| issue.assigned_to_id }.uniq
+      assigned_to_ids = target_issues.map { |issue| issue.assigned_to_id }.uniq
       
       assigned_dates = {} # 이미 배치된 일감들의 날짜를 추적
       assigned_to_ids.each do |assigned_to_id|
@@ -485,7 +425,7 @@ class MilestoneController < ApplicationController
         
         # 선행 일감들의 완료일을 고려하여 시작 가능한 날짜 계산
         search_start_date = assign_from_date
-        latest_predecessor_end_date = issue.latest_predecessor_end_date( issues )
+        latest_predecessor_end_date = issue.latest_predecessor_end_date( all_issues )
         
         if latest_predecessor_end_date.present?          
           search_start_date = [search_start_date, latest_predecessor_end_date + 1.day].max
@@ -529,6 +469,93 @@ class MilestoneController < ApplicationController
       end
 
       groups
+    end
+
+    # 로드맵 카테고리 포맷팅 (중복 코드 제거용)
+    def format_roadmap_categories(roadmap_data)
+      return [] unless roadmap_data&.categories&.any?
+      
+      roadmap_data.categories.map.with_index do |category, index|
+        {
+          name: category['name'] || '미분류',
+          index: index,
+          customColor: category['customColor'],
+          events: (category['events'] || []).map do |event|
+            {
+              name: event['name'] || '이름 없음',
+              schedules: (event['schedules'] || []).map do |schedule|
+                format_schedule(schedule)
+              end.compact
+            }
+          end.compact
+        }
+      end.compact
+    end
+
+    # 스케줄 포맷팅 (중복 코드 제거용)
+    def format_schedule(schedule)
+      begin
+        start_date = nil
+        end_date = nil
+        
+        # 날짜 파싱 시 예외 처리
+        if schedule['startDate'].present?
+          start_date = Date.parse(schedule['startDate']) rescue nil
+        end
+        
+        if schedule['endDate'].present?
+          end_date = Date.parse(schedule['endDate']) rescue nil
+        end
+
+        done_ratio = if schedule['issue'].present?
+                      issue = Issue.where(id: schedule['issue']).first
+                      issue.present? ? issue.done_ratio : nil
+                    else
+                      nil
+                    end
+      
+        {
+          name: schedule['name'] || '일정 없음',
+          startDate: start_date&.strftime('%Y-%m-%d'),
+          endDate: end_date&.strftime('%Y-%m-%d'),
+          issue: schedule['issue'] || '',
+          done_ratio: done_ratio,
+          customColor: schedule['customColor']
+        }
+      rescue => e
+        Rails.logger.warn "스케줄 파싱 오류: #{e.message}, 스케줄: #{schedule}"
+        {
+          name: schedule['name'] || '일정 없음',
+          startDate: nil,
+          endDate: nil,
+          issue: schedule['issue'] || '',
+          done_ratio: nil,
+          customColor: schedule['customColor']
+        }
+      end
+    end
+
+    # 로드맵 응답 데이터 구조 생성 (중복 코드 제거용)
+    def build_roadmap_response_data(roadmap_data, categories, description, name = 'Default')
+      {
+        metadata: build_roadmap_metadata(roadmap_data, description, name),
+        categories: categories
+      }
+    end
+
+    # 기본 로드맵 데이터 구조 생성 (중복 코드 제거용)
+    def build_default_roadmap_data(description, name = 'Default')
+      build_roadmap_response_data(nil, [], description, name)
+    end
+
+    # 로드맵 메타데이터 생성 (중복 코드 제거용)
+    def build_roadmap_metadata(roadmap_data, description, name = 'Default')
+      {
+        exportDate: roadmap_data&.updated_at&.iso8601 || Time.current.iso8601,
+        version: "1.0",
+        name: name,
+        description: description
+      }
     end
   end
   

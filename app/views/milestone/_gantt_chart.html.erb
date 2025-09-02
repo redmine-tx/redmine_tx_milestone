@@ -1,12 +1,13 @@
-  <%
+<%
+  def render_once( target_view )
     @style_included ||= false
     unless @style_included
       @style_included = true
-  %>
-      <%= render :partial => 'milestone/gantt_style' %>      
-      
-      
-  <% end  %>
+      render partial: target_view
+    end
+  end
+%>
+<%= render_once('milestone/gantt_style') %>
 
 <%
   # 담당자 링크 캐싱 헬퍼 메소드
@@ -125,7 +126,7 @@
 
     <div class="gantt-grid" style="grid-template-columns: <%=title_width%>px <%=person_width%>px;">
 
-        <div class="task-name" style="height: <%=cell_height*2+1%>px;"><span class="task-name-text"><%= title ? title : '일감' %></span></div>
+        <div class="task-name" style="height: <%=cell_height*2%>px;"><span class="task-name-text"><%= title ? title : '일감' %></span></div>
         <% if gantt_opts[:hide_assignee] != true %>
             <div class="assignee" style="left: <%=title_width%>px;">담당자</div>
         <% end %>
@@ -166,6 +167,10 @@
                     <span style="color: #0c0; font-weight: bold;">✓</span>
                 <% elsif IssueStatus.is_in_review?(issue.status_id) then %>
                     🔍
+                <% elsif IssueStatus.is_new?(issue.status_id) && issue.start_date && issue.start_date <= Date.today then %>
+                    ⚠️
+                <% elsif !IssueStatus.is_completed?(issue.status_id) && issue.due_date && issue.due_date < Date.today then %>
+                    🔥
                 <% end %>
                 <span class="issue-subject-link" style="<%= subject_style %>"><%= link_to "##{issue.id}", "/projects/#{ @project ? @project.identifier : issue.project.identifier }/milestone/gantt/issues/#{issue.id}" %> <%= link_to "#{issue.subject}".html_safe, gantt_opts[:issue_link_url] ? gantt_opts[:issue_link_url] + issue.id.to_s : issue_path(issue) %></span>
 
@@ -201,7 +206,7 @@
           
           if date == end_date
       %>
-            <div class="month-header" style="grid-column: span <%= month_cell_count %>;"><%= current_month %>월</div>
+            <div class="month-header" style="height: <%=cell_height - 4%>px; grid-column: span <%= month_cell_count %>;"><%= current_month %>월</div>
       <%  
           end
         end 
@@ -209,16 +214,16 @@
 
       <!-- 날짜 헤더 -->
       <% (start_date..end_date).each do |date| %>
-        <div class="date-header">
+        <div class="date-header" <%= date == start_date ? "style='height: #{cell_height - 4}px;'".html_safe : "" %>>
           <span class="date-header-text">
 
             <font color="<%= date.sunday? ? 'red' : date.saturday? ? 'blue' : 'black' %>"><%= date.day %></font>
 
             <% if date.sunday? || holidays[date] %>
-              <div class="highlight-column" style="width: <%=cell_width%>px; top: <%=cell_height + 1 %>px; left: <%= ((date - start_date).to_i * cell_width) %>px; background-color: rgba(255, 0, 0, 0.1);"></div>
+              <div class="highlight-column" style="width: <%=cell_width%>px; top: <%=cell_height  %>px; left: <%= ((date - start_date).to_i * cell_width) %>px; background-color: rgba(255, 0, 0, 0.1);"></div>
             <% end %>
             <% if date.saturday? %>
-              <div class="highlight-column" style="width: <%=cell_width%>px; top: <%=cell_height + 1 %>px; left: <%= ((date - start_date).to_i * cell_width) %>px; background-color: rgba(0, 80, 255, 0.1);"></div>
+              <div class="highlight-column" style="width: <%=cell_width%>px; top: <%=cell_height  %>px; left: <%= ((date - start_date).to_i * cell_width) %>px; background-color: rgba(0, 80, 255, 0.1);"></div>
             <% end %>
 
             <% vacation = ( ( defined?(user) && defined?(vacation_info) && vacation_info && vacation_info[date] ) ? vacation_info[date].select{ |k, v| k == user.login }[ user.login ] : nil ) %>

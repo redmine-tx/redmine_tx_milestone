@@ -1,5 +1,5 @@
 <%  excluded_group_ids = TxBaseHelper.config_arr('e_group') || []
-    groups = Group.all.select{ |group| !excluded_group_ids.include?(group.id) }
+    groups = Group.all.select{ |group| !excluded_group_ids.include?(group.id) }.sort_by{ |group| group.name }
     selected_group_id ||= nil
 %>
 
