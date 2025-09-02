@@ -1,0 +1,46 @@
+<% content_for :header_tags do %>
+    <%= context_menu %>
+    <%= javascript_include_tag 'context_menu' %>
+    <style>
+      .tip {
+        color: red;
+      }
+    </style>
+  <% end %>
+  
+  <% html_title("연계일감 점검") %>
+  
+  <%
+  
+  # 프로젝트 ID 조회
+  pid = Project.find_by(name: params[:project_id])&.id
+  
+  issues = Issue.where( project_id: pid )
+                .where( status_id: IssueStatus.in_progress_ids + IssueStatus.new_ids + IssueStatus.postponed_ids )
+                .where.not( tracker_id: Tracker.exception_trackers_ids )
+                .open
+                .where( due_date: .. (Date.today + 1.day) )
+
+  issues =  issues.select { |issue|
+                issue.follow_issues.select { |follow_issue|
+                    ( IssueStatus.new_ids + IssueStatus.postponed_ids ).include?(follow_issue.status_id) &&
+                    (follow_issue.start_date == nil || follow_issue.start_date < Date.today + 3 )
+                }.any?
+            }
+  %>
+
+  <%if issues.empty? %>
+    <p>최초 설정한 완료일이 뒤로 밀린 일감이 없습니다.</p>
+  <% else %>
+    <% issues.each do |issue| %>
+        <div class="box">
+            <%= render_issues( l(:label_sc_report_my_page_caution), @project, [issue], [:id, :tracker, :priority, :status, :category, :assigned_to, :subject, :fixed_version_plus, :done_ratio, :start_date, :due_date, :tags_relations] ) %>
+            후행일감 :
+            <ul>
+            <% issue.follow_issues.each do |follow_issue| %>
+              <li><span id="issue-<%= follow_issue.id %>" class="subject hascontextmenu"><%= link_to "##{follow_issue.id} #{follow_issue.subject}", issue_path(follow_issue), "data-id": follow_issue.id %></span></li>
+            <% end %>
+            </ul>
+        </div>
+    <% end %>
+  <% end %>
