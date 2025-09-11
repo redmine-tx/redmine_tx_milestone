@@ -1,0 +1,239 @@
+<div id="assigned-issues-list">
+  <% if assigned_issues.any? %>
+  <%= form_tag({}, :data => {:cm_url => issues_context_menu_path}) do -%>
+  <%= hidden_field_tag 'back_url', url_for(:params => request.query_parameters), :id => nil %>
+  <style>
+  /* Wrap long text to prevent horizontal scrolling */
+  #assigned-issues-table { table-layout: auto; width: 100%; }
+  #assigned-issues-table th, #assigned-issues-table td { white-space: normal; word-break: normal; overflow-wrap: break-word; hyphens: auto; }
+  #assigned-issues-table td a { white-space: normal; word-break: normal; overflow-wrap: break-word; hyphens: auto; }
+  #assigned-issues-pager { width: 100%; text-align: center; }
+  #assigned-issues-pager .show-all { float: right; }
+  </style>
+  <table class="list issues odd-even" id="assigned-issues-table">
+    <thead>
+      <tr>
+        <th class="checkbox hide-when-print"><%= check_box_tag 'check_all', '', false, :class => 'toggle-selection', :title => "#{l(:button_check_all)} / #{l(:button_uncheck_all)}" %></th>
+        <th data-sort-type="number"><a href="javascript:void(0)" data-sort-dir="desc"><%= l(:field_id) %></a></th>
+        <th data-sort-type="string"><a href="javascript:void(0)" data-sort-dir="desc"><%= l(:label_project) %></a></th>
+        <th data-sort-type="string"><a href="javascript:void(0)" data-sort-dir="desc"><%= l(:field_tracker) %></a></th>
+        <th data-sort-type="number"><a href="javascript:void(0)" data-sort-dir="desc"><%= l(:field_status) %></a></th>
+        <th data-sort-type="string"><a href="javascript:void(0)" data-sort-dir="desc"><%= l(:field_subject) %></a></th>        
+        <th data-sort-type="string"><a href="javascript:void(0)" data-sort-dir="desc"><%= l(:field_fixed_version) %></a></th>
+        <th data-sort-type="number"><a href="javascript:void(0)" data-sort-dir="desc"><%= l(:field_done_ratio) %></a></th>
+        <th data-sort-type="number"><a href="javascript:void(0)" data-sort-dir="desc"><%= l(:field_priority) %></a></th>
+        <th data-sort-type="number"><a href="javascript:void(0)" data-sort-dir="desc"><%= l(:field_updated_on) %></a></th>
+        <th data-sort-type="number"><a href="javascript:void(0)" data-sort-dir="desc"><%= l(:field_start_date) %></a></th>
+        <th data-sort-type="number"><a href="javascript:void(0)" data-sort-dir="desc"><%= l(:field_due_date) %></a></th>
+        <th data-sort-type="string"><a href="javascript:void(0)" data-sort-dir="desc"><%= l(:field_tip) %></a></th>
+      </tr>
+    </thead>
+    <tbody>
+      <% assigned_issues.each do |issue| %>
+      <tr class="hascontextmenu <%= cycle('odd', 'even') %> issue priority-<%= issue.priority.id %> <%=
+        case issue.priority.position
+        when 5 then 'priority-highest'
+        when 4 then 'priority-high2'
+        when 3 then 'priority-high3'
+        when 2 then 'priority-default'
+        else 'priority-lowest'
+        end
+      %>" id="issue-<%= issue.id %>">
+        <td class="checkbox hide-when-print"><%= check_box_tag 'ids[]', issue.id, false, :id => nil %></td>
+        <td data-sort="<%= issue.id %>"><%= issue.id %></td>
+        <td data-sort="<%= issue.project.name %>"><%= link_to_project(issue.project) %></td>
+        <td data-sort="<%= issue.tracker.name %>"><%= issue.tracker %></td>
+        <td data-sort="<%= issue.status.position %>"><%= issue.status %></td>
+        <td data-sort="<%= issue.subject %>"><%= link_to issue.subject, issue_path(issue) %></td>
+        <td data-sort="<%= issue.fixed_version_sort_value %>"><%= ( issue.respond_to?(:fixed_version_plus) ? issue.fixed_version_plus : ( issue.fixed_version ? issue.fixed_version.name : '' ) ) %></td>
+        <td data-sort="<%= issue.done_ratio %>">
+        <table class="progress" style="width: 80px;">
+          <tr>
+            <td class="closed" style="width: <%= issue.done_ratio || 0 %>%;"></td>
+            <td class="todo" style="width: <%= 100 - (issue.done_ratio || 0) %>%;"></td>
+          </tr>
+        </table>
+        </td>
+        <td data-sort="<%= issue.priority.position %>"><%= issue.priority %></td>
+        <td data-sort="<%= issue.updated_on.to_i %>"><%= format_time(issue.updated_on) %></td>
+        <td data-sort="<%= issue.start_date ? issue.start_date.to_time.to_i : 0 %>"><%= format_date(issue.start_date) %></td>
+        <td data-sort="<%= issue.due_date ? issue.due_date.to_time.to_i : 0 %>"><%= format_date(issue.due_date) %></td>
+        <td data-sort="<%= issue.tip %>"><font color="red"><%= issue.tip %></font></td>
+      </tr>
+      <% end %>
+    </tbody>
+  </table>
+  <center><div id="assigned-issues-pager" class="pagination"></div></center>
+  <% end -%>
+  <% else %>
+    <p><%= l(:label_no_data) %></p>
+  <% end %>
+<%# Context menu container for issues %>
+<%= context_menu %>
+</div>
+
+<script>
+(function() {
+  function ready(fn){ if(document.readyState !== 'loading') { fn(); } else { document.addEventListener('DOMContentLoaded', fn); } }
+  ready(function() {
+    var table = document.getElementById('assigned-issues-table');
+    if (!table) return;
+    var headers = table.querySelectorAll('thead th');
+    var pageSize = 15;
+    var currentPage = 1;
+    var showAll = false;
+
+    function recalcRowClasses() {
+      var tbody = table.tBodies[0];
+      var rows = Array.prototype.slice.call(tbody.rows);
+      var visibleIndex = 0;
+      rows.forEach(function(row){
+        row.classList.remove('odd', 'even');
+        if (row.style.display === 'none') return;
+        row.classList.add((visibleIndex % 2 === 0) ? 'odd' : 'even');
+        visibleIndex++;
+      });
+    }
+
+    function applyPagination() {
+      var tbody = table.tBodies[0];
+      var rows = Array.prototype.slice.call(tbody.rows);
+      if (showAll) {
+        rows.forEach(function(row){ row.style.display = ''; });
+        return;
+      }
+      var start = (currentPage - 1) * pageSize;
+      var end = start + pageSize;
+      rows.forEach(function(row, idx) {
+        row.style.display = (idx >= start && idx < end) ? '' : 'none';
+      });
+    }
+
+    function getPager() {
+      var pager = document.getElementById('assigned-issues-pager');
+      if (!pager) {
+        pager = document.createElement('div');
+        pager.id = 'assigned-issues-pager';
+        pager.className = 'pagination';
+        table.parentNode.insertBefore(pager, table.nextSibling);
+      }
+      return pager;
+    }
+
+    function updatePager() {
+      var tbody = table.tBodies[0];
+      var totalRows = tbody.rows.length;
+      var totalPages = Math.max(1, Math.ceil(totalRows / pageSize));
+      if (currentPage > totalPages) currentPage = totalPages;
+
+      var pager = getPager();
+      pager.innerHTML = '';
+      pager.style.width = '100%';
+      pager.style.textAlign = 'center';
+
+      function mkBtn(label, disabled, onClick) {
+        var a = document.createElement('a');
+        a.href = 'javascript:void(0)';
+        a.textContent = label;
+        if (disabled) {
+          a.className = 'disabled';
+          a.style.pointerEvents = 'none';
+          a.style.opacity = '0.5';
+        } else {
+          a.addEventListener('click', onClick);
+        }
+        return a;
+      }
+
+      var controls = document.createElement('span');
+      controls.className = 'pager-controls';
+      if (!showAll) {
+        controls.appendChild(mkBtn('<< ', currentPage === 1, function(){ currentPage = 1; applyPagination(); recalcRowClasses(); updatePager(); }));
+        controls.appendChild(mkBtn('< ', currentPage === 1, function(){ currentPage--; applyPagination(); recalcRowClasses(); updatePager(); }));
+      }
+
+      var start = Math.max(1, currentPage - 2);
+      var end = Math.min(totalPages, currentPage + 2);
+      if (!showAll) {
+        if (start > 1) {
+          controls.appendChild(mkBtn(' 1 ', false, function(){ currentPage = 1; applyPagination(); recalcRowClasses(); updatePager(); }));
+          if (start > 2) controls.appendChild(document.createTextNode(' ... '));
+        }
+        for (var i = start; i <= end; i++) {
+          (function(p){
+            var btn = mkBtn(' ' + String(p) + ' ', false, function(){ currentPage = p; applyPagination(); recalcRowClasses(); updatePager(); });
+            if (p === currentPage) {
+              btn.className = (btn.className ? btn.className + ' ' : '') + 'selected';
+              btn.style.fontWeight = 'bold';
+              btn.style.fontSize = '120%';
+            }
+            controls.appendChild(btn);
+          })(i);
+        }
+        if (end < totalPages) {
+          if (end < totalPages - 1) controls.appendChild(document.createTextNode(' ... '));
+          controls.appendChild(mkBtn(String(totalPages), false, function(){ currentPage = totalPages; applyPagination(); recalcRowClasses(); updatePager(); }));
+        }
+      }
+
+      if (!showAll) {
+        controls.appendChild(mkBtn(' >', currentPage === totalPages, function(){ currentPage++; applyPagination(); recalcRowClasses(); updatePager(); }));
+        controls.appendChild(mkBtn(' >>', currentPage === totalPages, function(){ currentPage = totalPages; applyPagination(); recalcRowClasses(); updatePager(); }));
+      }
+
+
+      pager.appendChild(controls);
+
+      var showAllLink = document.createElement('a');
+      showAllLink.href = 'javascript:void(0)';
+      showAllLink.className = 'show-all';
+      showAllLink.textContent = showAll ? '간략히' : '전체보기';
+      showAllLink.addEventListener('click', function(){
+        showAll = !showAll;
+        if (!showAll && currentPage < 1) currentPage = 1;
+        applyPagination();
+        recalcRowClasses();
+        updatePager();
+      });
+      pager.appendChild(showAllLink);
+    }
+
+    headers.forEach(function(th, idx) {
+      var typeAttr = th.getAttribute('data-sort-type');
+      if (!typeAttr) { return; }
+      th.style.cursor = 'pointer';
+      th.addEventListener('click', function() {
+        var tbody = table.tBodies[0];
+        var rows = Array.prototype.slice.call(tbody.rows);
+        var type = th.getAttribute('data-sort-type') || 'string';
+        var dir = th.getAttribute('data-sort-dir') === 'desc' ? 'asc' : 'desc';
+        headers.forEach(function(h){ h.removeAttribute('data-sort-dir'); });
+        th.setAttribute('data-sort-dir', dir);
+        rows.sort(function(a, b) {
+          var av = a.cells[idx].getAttribute('data-sort') || a.cells[idx].textContent.trim();
+          var bv = b.cells[idx].getAttribute('data-sort') || b.cells[idx].textContent.trim();
+          if (type === 'number') {
+            av = parseFloat(av) || 0;
+            bv = parseFloat(bv) || 0;
+          } else {
+            av = av.toString().toLowerCase();
+            bv = bv.toString().toLowerCase();
+          }
+          if (av < bv) return dir === 'asc' ? -1 : 1;
+          if (av > bv) return dir === 'asc' ? 1 : -1;
+          return 0;
+        });
+        rows.forEach(function(row) { tbody.appendChild(row); });
+        currentPage = 1;
+        applyPagination();
+        recalcRowClasses();
+        updatePager();
+      });
+    });
+
+    applyPagination();
+    recalcRowClasses();
+    updatePager();
+  });
+})();
+</script>

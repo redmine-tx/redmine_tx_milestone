@@ -42,26 +42,27 @@ class MilestoneController < ApplicationController
       # 캐시 키 생성 - 프로젝트 ID와 날짜를 포함
       cache_key = "milestone_report_5#{@project.id}_#{today.strftime('%Y-%m-%d_%H-%M')}"
       
-      @issues_by_week, @avarage_hours_per_category = Rails.cache.fetch(cache_key, expires_in: 5.minutes) do
+      @issues_by_days, @avarage_hours_per_category = Rails.cache.fetch(cache_key, expires_in: 5.minutes) do
 
-        categories = IssueCategory.all.pluck(:id, :name).to_h
-        
+        categories = IssueCategory.all.pluck(:id, :name).to_h        
 
         tracker_ids = Tracker.where( is_sidejob: false ).where( is_exception: false ).pluck(:id)        
+        bug_ids = Tracker.where( is_bug: true ).pluck(:id)
 
         issues = Issue.where( project_id: @project.id ).where( tracker_id: tracker_ids ).where( 'created_on >= ? OR end_time >= ?', Date.today - 1.year, Date.today - 1.year )
-        issues_by_week = []
+        issues_by_days = []
 
-        (1..20).each { |week|
-            created_issues = issues.select { |issue| issue.created_on.present? && issue.created_on > today - week.weeks && issue.created_on <= today - (week - 1).weeks }
-            completed_issues = issues.select { |issue| issue.end_time.present? && issue.end_time > today - week.weeks && issue.end_time <= today - (week - 1).weeks }
+        (0..13).each { |day|
+            created_issues = issues.select { |issue| issue.created_on.present? && issue.created_on >= today - day.days && issue.created_on <= today - (day - 1).days }
+            completed_issues = issues.select { |issue| issue.end_time.present? && issue.end_time >= today - day.days && issue.end_time <= today - (day - 1).days }
 
-            issues_by_category = {}
+            issues_by_category = { 'BUG' => { created: 0, completed: 0 } }
 
             created_issues.each { |issue|
               next unless issue.category_id
               category_name = categories[issue.category_id]
-              next unless category_name  # nil 체크 추가
+              category_name = 'BUG' if bug_ids.include?(issue.tracker_id)
+              next unless category_name  # nil 체크 추가              
               issues_by_category[category_name] ||= { created: 0, completed: 0 }
               issues_by_category[category_name][:created] += 1
             }
@@ -69,19 +70,21 @@ class MilestoneController < ApplicationController
             completed_issues.each { |issue|
               next unless issue.category_id
               category_name = categories[issue.category_id]
-              next unless category_name  # nil 체크 추가
+              category_name = 'BUG' if bug_ids.include?(issue.tracker_id)
+              next unless category_name  # nil 체크 추가              
               issues_by_category[category_name] ||= { created: 0, completed: 0 }
               issues_by_category[category_name][:completed] += 1
             }          
 
-            issues_by_week.push( {week: week, created: created_issues.size, completed: completed_issues.size, issues_by_category: issues_by_category} )
+            issues_by_days.push( {day: Date.today - day.days, created: created_issues.size, completed: completed_issues.size, issues_by_category: issues_by_category} )
         }
 
-        avarage_hours_per_category = {}
-        avarage_count_per_category = {}
+        avarage_hours_per_category = { 'BUG' => 0 }
+        avarage_count_per_category = { 'BUG' => 0 }
         issues.where.not( begin_time: nil ).where.not( end_time: nil ).each { |issue|
           next unless issue.category_id
           category_name = categories[issue.category_id]
+          category_name = 'BUG' if bug_ids.include?(issue.tracker_id)
           next unless category_name  # nil 체크 추가
           next if issue.end_time - issue.begin_time >= 1.year
           avarage_hours_per_category[category_name] ||= 0
@@ -90,7 +93,7 @@ class MilestoneController < ApplicationController
           avarage_count_per_category[category_name] += 1
         }
 
-        [ issues_by_week, avarage_hours_per_category.map { |category_name, hours| [ category_name, (hours / avarage_count_per_category[category_name])/3600 ] }.to_h ]
+        [ issues_by_days, avarage_hours_per_category.map { |category_name, hours| [ category_name, (hours / avarage_count_per_category[category_name])/3600 ] }.to_h ]
       end
 
     end
@@ -384,7 +387,7 @@ end
     end
   
     def authorize
-      raise Unauthorized unless User.current.allowed_to?(:view_sc_report, @project)
+      raise Unauthorized unless User.current.allowed_to?(:view_milestone, @project)
     end
 
      

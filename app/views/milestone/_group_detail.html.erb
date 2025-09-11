@@ -26,8 +26,11 @@
   users = group.users.active
   user_ids = users.map(&:id)
 
-  gantt_start_date = Date.today - 17.days
-  gantt_end_date = Date.today + 65.days
+  before_length = 20.days
+  after_length = 65.days
+
+  gantt_start_date = Date.today - before_length
+  gantt_end_date = Date.today + after_length
 
   vacation_info = UserStatusHelper.get_user_vacation_info( gantt_start_date..gantt_end_date )
 
@@ -77,7 +80,7 @@ document.addEventListener('DOMContentLoaded', function() {
 <% users.each do |user| %>
   <div style="border: 1px solid #ccc; padding: 15px; margin-bottom: 20px; border-radius: 4px;">
     <h2 style="display: inline-block; right-margin: 10px;"><%= link_to_principal user %></h2> <%= link_to '작업내역', "/activity?show_issues=1&with_subprojects=1&user_id=#{user.id}", target: '_blank' %> | <%= link_to '내페이지', "/my/page?user_id=#{user.id}", target: '_blank' %>
-    <%= render :partial => 'milestone/user_detail', locals: { user: user, vacation_info: vacation_info } %>
+    <%= render :partial => 'milestone/user_detail', locals: { user: user, vacation_info: vacation_info, before_length: before_length, after_length: after_length } %>
   </div>
 <% end %>
 

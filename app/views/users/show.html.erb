@@ -26,6 +26,20 @@
 
 <%= render :partial => 'milestone/user_detail', locals: { user: @user, gantt_opts: { before_length: 65.days } } %>
 
+
+
+<%
+  assigned_to_ids = [@user.id]
+  assigned_issues = Issue.visible.where(assigned_to_id: assigned_to_ids).where( status_id: IssueStatus.in_progress_ids + IssueStatus.new_ids ).includes(:project, :tracker, :status, :priority).to_a
+  assigned_issues.sort! { |a, b| [0 - a.priority.position, a.fixed_version_sort_value] <=> [ 0 - b.priority.position, b.fixed_version_sort_value] }
+%>
+
+<br>
+
+<h3><%= l(:label_assigned_issues) %> (<%= assigned_issues.size %>)</h3>
+
+<%= render partial: 'milestone/issue_list', locals: { assigned_issues: assigned_issues } %>
+
 <br>
 
 </div>
