@@ -1,0 +1,127 @@
+<div class="welcome-stats">
+  <%= render partial: 'milestone/version_select', locals: { select_id: 'welcomeVersionSelect' } %>
+  <% if @basic_stats %>
+    <div class="stats-grid">
+      <div class="stat-card">
+        <% issues_rate = @basic_stats[:total_issues].to_i > 0 ? ((@basic_stats[:completed_issues].to_f / @basic_stats[:total_issues].to_f) * 100).round(1) : 0 %>
+        <div class="card-fill" style="width: <%= issues_rate %>%;"></div>
+        <h3>📋 전체 일감</h3>
+        <div class="stat-number"><%= (@basic_stats[:total_issues] - @basic_stats[:completed_issues]) %><span class="stat-number-muted">/<%= @basic_stats[:total_issues] %></span></div>
+        <div class="stat-detail">완료: <%= @basic_stats[:completed_issues] %> (<%= @basic_stats[:completion_rate] %>%)</div>
+      </div>
+      
+      <div class="stat-card">
+        <% bugs_rate = @basic_stats[:total_bugs].to_i > 0 ? ((@basic_stats[:completed_bugs].to_f / @basic_stats[:total_bugs].to_f) * 100).round(1) : 0 %>
+        <div class="card-fill" style="width: <%= bugs_rate %>%;"></div>
+        <h3>🐛 버그</h3>
+        <div class="stat-number"><%= (@basic_stats[:total_bugs] - @basic_stats[:completed_bugs]) %><span class="stat-number-muted">/<%= @basic_stats[:total_bugs] %></span></div>
+        <div class="stat-detail">완료: <%= @basic_stats[:completed_bugs] %> (<%= @basic_stats[:bug_completion_rate] %>%)</div>
+      </div>
+      
+      <div class="stat-card">
+        <div class="card-fill" style="width: <%= @basic_stats[:completion_rate].to_f %>%;"></div>
+        <h3>📊 전체 진행률</h3>
+        <div class="stat-number"><%= @basic_stats[:completion_rate] %>%</div>
+        <div class="stat-detail">일감 완료 비율</div>
+      </div>
+      
+      <div class="stat-card">
+        <div class="card-fill" style="width: <%= @basic_stats[:bug_completion_rate].to_f %>%;"></div>
+        <h3>🎯 버그 해결률</h3>
+        <div class="stat-number"><%= @basic_stats[:bug_completion_rate] %>%</div>
+        <div class="stat-detail">버그 완료 비율</div>
+      </div>
+    </div>
+    
+    <div class="navigation-links">
+      <p>더 자세한 통계를 보려면 위의 탭을 클릭하세요:</p>
+      <ul>
+        <li><strong>📊 일감 통계</strong>: 카테고리별 일감 생성/완료 현황, 평균 소요시간</li>
+        <li><strong>🐛 버그 통계</strong>: 담당자별 미해결 버그 현황, 버그 해결 추이</li>
+      </ul>
+    </div>
+  <% else %>
+    <p>통계 데이터를 불러오는 중입니다...</p>
+  <% end %>
+</div>
+
+<%# version_select partial includes its own script %>
+
+<style>
+.welcome-stats {
+  padding: 20px;
+}
+
+.stats-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(250px, 1fr));
+  gap: 20px;
+  margin-bottom: 30px;
+}
+
+.stat-card {
+  background: #f8f9fa;
+  border: 1px solid #dee2e6;
+  border-radius: 8px;
+  padding: 20px;
+  text-align: center;
+  box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+  position: relative;
+  overflow: hidden;
+}
+
+.card-fill {
+  position: absolute;
+  inset: 0 auto 0 0; /* left fill */
+  background: rgba(40, 167, 69, 0.15); /* 옅은 초록색 */
+  width: 0%;
+  transition: width 300ms ease;
+}
+
+.stat-card h3 {
+  margin: 0 0 15px 0;
+  color: #495057;
+  font-size: 16px;
+}
+
+.stat-number {
+  font-size: 36px;
+  font-weight: bold;
+  color: #007bff;
+  margin-bottom: 10px;
+}
+
+.stat-number-muted {
+  color: #6c757d;
+  font-weight: 600;
+  font-size: 70%;
+  margin-left: 4px;
+}
+
+.stat-detail {
+  color: #6c757d;
+  font-size: 14px;
+}
+
+.navigation-links {
+  background: #e9ecef;
+  border-radius: 8px;
+  padding: 20px;
+}
+
+.navigation-links p {
+  margin: 0 0 15px 0;
+  font-weight: bold;
+  color: #495057;
+}
+
+.navigation-links ul {
+  margin: 0;
+  padding-left: 20px;
+}
+
+.navigation-links li {
+  margin-bottom: 8px;
+  color: #6c757d;
+}
+</style>

@@ -1,0 +1,75 @@
+<%
+
+    all_categories = []
+    all_categories = @issues_by_days.map { |day_data| day_data[:issues_by_category].keys }.flatten.uniq
+
+    all_categories = all_categories.sort_by { |category|
+        @issues_by_days.sum { |day_data|
+            created_count = day_data[:issues_by_category][category] ? day_data[:issues_by_category][category][:created] : 0
+            completed_count = day_data[:issues_by_category][category] ? day_data[:issues_by_category][category][:completed] : 0
+            created_count + completed_count
+        }
+    }.reverse[0..9]
+%>
+
+<%= render partial: 'milestone/version_select', locals: { select_id: 'issuesVersionSelect' } %>
+
+<table class="list">
+    <thead>
+        <tr>
+            <th>기간</th>
+            <th>전체</th>
+            <% all_categories.each do |category| %>
+                <th><%= category %></th>
+            <% end %>
+        </tr>
+    </thead>
+    <tbody>
+        <% @issues_by_days.reverse.each do |day_data| %>
+            <% 
+                day = day_data[:day]
+                created_count = day_data[:created]
+                completed_count = day_data[:completed]
+                all_count = day_data[:all]
+            %>
+            <tr>
+                <td><%= day %></td>
+                <td><%= completed_count %>/<%= created_count %> (<%= created_count > 0 ? (completed_count.to_f / created_count.to_f * 100).round(2) : 0 %>%)</td>
+                <% all_categories.each do |category|
+                    created_count = day_data[:issues_by_category][category] ? day_data[:issues_by_category][category][:created] : 0
+                    completed_count = day_data[:issues_by_category][category] ? day_data[:issues_by_category][category][:completed] : 0
+                    %>
+                    <td><%= completed_count %>/<%= created_count %> (<%= created_count > 0 ? (completed_count.to_f / created_count.to_f * 100).round(2) : 0 %>%)</td>
+                <% end %>
+            </tr>
+        <% end %>        
+        <tr>
+            <td>통계</td>
+            <td><%= @issues_by_days.sum { |day_data| day_data[:completed] } %>/<%= @issues_by_days.sum { |day_data| day_data[:created] } %> (<%= (@issues_by_days.sum { |day_data| day_data[:completed] }.to_f / @issues_by_days.sum { |day_data| day_data[:created] }.to_f * 100).round(2) %>%)</td>
+            <% all_categories.each do |category|%>                
+                <%
+                    created_count = @issues_by_days.sum { |day_data| day_data[:issues_by_category][category] ? day_data[:issues_by_category][category][:created] : 0 }
+                    completed_count = @issues_by_days.sum { |day_data| day_data[:issues_by_category][category] ? day_data[:issues_by_category][category][:completed] : 0 }
+                %>
+                <td><%= completed_count %>/<%= created_count %> (<%= (completed_count.to_f / created_count.to_f * 100).round(2) %>%)</td>
+            <% end %>
+        </tr>    
+        <tr>
+            <td>잔여</td>
+            <td>...</td>
+            <% all_categories.each do |category|%>
+                <td><%= @rest_issue_count_per_category[category] || 0 %></td>
+            <% end %>
+        </tr>    
+        <tr>
+            <td>평균 소요 시간</td>
+            <%
+                avarage_hours = all_categories.sum { |category| @avarage_hours_per_category[category].to_i } / all_categories.size
+            %>
+            <td><%= avarage_hours/8 %>일</td>
+            <% all_categories.each do |category|%>
+                <td><%= @avarage_hours_per_category[category] ? @avarage_hours_per_category[category]/8 : category %>일</td>
+            <% end %>
+        </tr>
+    </tbody>
+</table>

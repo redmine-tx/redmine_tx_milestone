@@ -1,0 +1,16 @@
+<div class="tabs">
+  <ul>
+    <% q = params[:version_id].present? ? ("?version_id=" + params[:version_id].to_s) : '' %>
+    <li><%= link_to '🏠 시작', '/projects/' + params[:project_id].to_s + '/milestone/report' + q, class: params[:report_type].nil? ? 'selected' : '' %></li>
+    <li><%= link_to '📊 일감 통계', '/projects/' + params[:project_id].to_s + '/milestone/report/issues' + q, class: params[:report_type] == 'issues' ? 'selected' : '' %></li>
+    <li><%= link_to '🐛 버그 통계', '/projects/' + params[:project_id].to_s + '/milestone/report/bugs' + q, class: params[:report_type] == 'bugs' ? 'selected' : '' %></li>
+    </ul>
+</div>
+
+<% if params[:report_type] == 'issues' %>
+  <%= render :partial => 'milestone/reports/issues' %>
+<% elsif params[:report_type] == 'bugs' %>
+  <%= render :partial => 'milestone/reports/bugs' %>
+<% else %>
+  <%= render :partial => 'milestone/reports/welcome_report' %>
+<% end %>

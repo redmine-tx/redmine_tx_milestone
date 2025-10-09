@@ -1,0 +1,28 @@
+<% available_versions = Version.where(project_id: @project.id).order(:effective_date).open %>
+<% default_version_id = @project&.default_version&.id %>
+<div style="display: flex; align-items: center; gap: 8px; margin: 0 0 12px 0;">
+  <label for="<%= local_assigns[:select_id] || 'versionSelect' %>" style="font-weight: bold;">버전</label>
+  <select id="<%= local_assigns[:select_id] || 'versionSelect' %>">
+    <option value="all"><%= '전체 버전' %></option>
+    <% available_versions.each do |v| %>
+      <option value="<%= v.id %>" <%= 'selected' if (params[:version_id].presence || default_version_id).to_s == v.id.to_s %>><%= v.name %></option>
+    <% end %>
+  </select>
+</div>
+<script>
+document.addEventListener('DOMContentLoaded', function() {
+  const select = document.getElementById('<%= local_assigns[:select_id] || 'versionSelect' %>');
+  if (!select) return;
+  select.addEventListener('change', function() {
+    const url = new URL(window.location.href);
+    const val = this.value;
+    if (val && val.length > 0) {
+      url.searchParams.set('version_id', val);
+    } else {
+      url.searchParams.delete('version_id');
+    }
+    window.location.href = url.toString();
+  });
+});
+</script>
+

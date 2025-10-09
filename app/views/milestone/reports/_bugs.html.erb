@@ -1,0 +1,851 @@
+<%
+
+    all_categories = []
+    all_categories = @issues_by_days.map { |day_data| day_data[:issues_by_category].keys }.flatten.uniq
+    
+    # 수동으로 URL 쿼리 문자열 구성 (중첩 배열 방지)
+    bug_ids = Tracker.where(is_bug: true).pluck(:id)
+
+    rest_bug_issues = @all_bug_issues.select { |issue| issue.end_time.nil?}.sort_by { |issue| [ -issue.priority.position, issue.fixed_version_sort_value || '', 100 - issue.done_ratio.to_i ] }
+    fixing_bugs = @all_bug_issues.select { |issue| issue.end_time.nil? && issue.begin_time.present? && issue.begin_time >= 3.days.ago && issue.updated_on >= 3.days.ago }
+%>
+<div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 10px;">
+  <div style="flex: 0 0 auto;">
+    <%= render partial: 'milestone/version_select', locals: { select_id: 'versionSelect' } %>
+  </div>
+  <div style="flex: 0 0 auto; color: #666; font-size: 0.9em;">
+    마지막 갱신 : <%= format_time(@updated_at) %>
+  </div>
+</div>
+
+<!-- BUG 타입 추이 그래프 -->
+<div style="margin-top: 30px;">
+    <h3>BUG 해결 추이</h3>
+    <canvas id="bugTrendChart" width="400" height="100"></canvas>
+</div>
+
+<!-- 카테고리별 미해결 BUG 원형 그래프 -->
+<div style="margin-top: 16px;">
+    <h3>카테고리별 미해결 BUG 분포</h3>
+    <% if @rest_bug_count_per_category.present? %>
+        <%
+          sorted_categories = @rest_bug_count_per_category.sort_by { |k, v| -v }
+          top_10 = sorted_categories.first(10)
+          others_total = sorted_categories.drop(10).sum { |_, v| v }
+          pie_labels = top_10.map { |k, _| k }
+          pie_data = top_10.map { |_, v| v }
+          if others_total > 0
+            pie_labels << '기타'
+            pie_data << others_total
+          end
+        %>
+        <div style="display: flex; gap: 20px; align-items: flex-start;">
+            <div style="position: relative; width: 340px; height: 340px; flex-shrink: 0;">
+                <canvas id="categoryBugPieChart" width="340" height="340" style="display: block; width: 100%; height: 340px;"></canvas>
+            </div>
+            <div id="customLegend" style="display: inline-block; min-width: fit-content;">
+                <!-- 커스텀 범례가 여기에 생성됩니다 -->
+            </div>
+        </div>
+        <script>
+        (function() {
+            const labels = <%= raw pie_labels.to_json %>;
+            const data = <%= raw pie_data.to_json %>;
+            const ctxPie = document.getElementById('categoryBugPieChart').getContext('2d');
+            const colors = [
+                '#97C0CB', '#DEA593', '#E5CB8A', '#B1CA94', '#C1AACB',
+                '#9CC3CA', '#E0C0CE', '#B2C8D8', '#E5C4AD', '#CBD8B6',
+                '#DAC9D4'
+            ];
+            function renderPie() {
+                const sliceLabelPlugin = {
+                    id: 'sliceLabelPlugin',
+                    afterDatasetsDraw(chart, args, pluginOptions) {
+                        const ctx = chart.ctx;
+                        const dataset = chart.data.datasets[0] || { data: [] };
+                        const total = (dataset.data || []).reduce((sum, v) => sum + v, 0);
+                        const meta = chart.getDatasetMeta(0);
+                        if (!meta || !meta.data) return;
+                        
+                        ctx.save();
+                        
+                        // 5% 이하인 라벨들의 위치 조정을 위한 배열
+                        const smallLabels = [];
+                        const normalLabels = [];
+                        
+                        meta.data.forEach((arc, i) => {
+                            const value = (dataset.data && dataset.data[i]) ? dataset.data[i] : 0;
+                            const percent = total ? (value / total * 100) : 0;
+                            if (percent < 3) return; // 너무 작은 것은 표시하지 않음
+                            
+                            const labelsArr = (chart.data && chart.data.labels) ? chart.data.labels : [];
+                            const labelText = (labelsArr[i] !== undefined && labelsArr[i] !== null && labelsArr[i] !== '')
+                                ? String(labelsArr[i])
+                                : '';
+                            if (!labelText) return;
+                            
+                            // 라벨 텍스트에 개수 추가 (개행)
+                            const displayText = labelText + '\n(' + value + '개)';
+                            
+                            const pos = arc.tooltipPosition();
+                            const centerX = chart.chartArea.left + (chart.chartArea.right - chart.chartArea.left) / 2;
+                            const centerY = chart.chartArea.top + (chart.chartArea.bottom - chart.chartArea.top) / 2;
+                            
+                            if (percent <= 5) {
+                                // 5% 이하인 경우 더 멀리 배치
+                                const angle = Math.atan2(pos.y - centerY, pos.x - centerX);
+                                const extraDistance = 30 + (smallLabels.length * 15); // 순서대로 더 멀리
+                                const newX = centerX + Math.cos(angle) * (Math.abs(pos.x - centerX) + extraDistance);
+                                const newY = centerY + Math.sin(angle) * (Math.abs(pos.y - centerY) + extraDistance);
+                                smallLabels.push({ text: displayText, x: newX, y: newY });
+                            } else {
+                                normalLabels.push({ text: displayText, x: pos.x, y: pos.y });
+                            }
+                        });
+                        
+                        // 일반 라벨 그리기
+                        ctx.textAlign = 'center';
+                        ctx.textBaseline = 'middle';
+                        ctx.font = '12px sans-serif';
+                        
+                        normalLabels.forEach(label => {
+                            const lines = label.text.split('\n');
+                            const lineHeight = 14;
+                            const startY = label.y - ((lines.length - 1) * lineHeight / 2);
+                            
+                            lines.forEach((line, lineIndex) => {
+                                const y = startY + (lineIndex * lineHeight);
+                                ctx.strokeStyle = 'rgba(255,255,255,0.95)';
+                                ctx.lineWidth = 3;
+                                ctx.strokeText(line, label.x, y);
+                                ctx.fillStyle = '#333333';
+                                ctx.fillText(line, label.x, y);
+                            });
+                        });
+                        
+                        // 작은 라벨 그리기 (겹침 방지 처리)
+                        ctx.font = '11px sans-serif';
+                        smallLabels.forEach((label, index) => {
+                            // 이전 라벨들과의 겹침 확인 및 조정
+                            for (let j = 0; j < index; j++) {
+                                const prevLabel = smallLabels[j];
+                                const distance = Math.sqrt(Math.pow(label.x - prevLabel.x, 2) + Math.pow(label.y - prevLabel.y, 2));
+                                if (distance < 40) {
+                                    // 겹치면 위치 조정
+                                    const angle = Math.atan2(label.y - prevLabel.y, label.x - prevLabel.x);
+                                    label.x = prevLabel.x + Math.cos(angle) * 45;
+                                    label.y = prevLabel.y + Math.sin(angle) * 45;
+                                }
+                            }
+                            
+                            const lines = label.text.split('\n');
+                            const lineHeight = 13;
+                            const startY = label.y - ((lines.length - 1) * lineHeight / 2);
+                            
+                            lines.forEach((line, lineIndex) => {
+                                const y = startY + (lineIndex * lineHeight);
+                                ctx.strokeStyle = 'rgba(255,255,255,0.95)';
+                                ctx.lineWidth = 3;
+                                ctx.strokeText(line, label.x, y);
+                                ctx.fillStyle = '#333333';
+                                ctx.fillText(line, label.x, y);
+                            });
+                        });
+                        
+                        ctx.restore();
+                    }
+                };
+
+                const chartInstance = new Chart(ctxPie, {
+                    type: 'pie',
+                    data: {
+                        labels: labels,
+                        datasets: [{
+                            data: data,
+                            backgroundColor: labels.map((_, i) => colors[i % colors.length]),
+                            borderWidth: 1
+                        }]
+                    },
+                    plugins: [sliceLabelPlugin],
+                    options: {
+                        responsive: true,
+                        maintainAspectRatio: false,
+                        plugins: {
+                            legend: {
+                                display: false  // 기본 범례 비활성화
+                            },
+                            title: { display: false }
+                        }
+                    }
+                });
+
+                // 커스텀 범례 생성
+                createCustomLegend();
+            }
+
+            function createCustomLegend() {
+                const legendContainer = document.getElementById('customLegend');
+                if (!legendContainer) return;
+
+                const total = data.reduce((sum, v) => sum + Number(v || 0), 0);
+                
+                // 범례 헤더 스타일
+                const headerStyle = `
+                    display: grid; 
+                    grid-template-columns: 20px minmax(120px, max-content) 60px 60px; 
+                    gap: 12px; 
+                    padding: 8px 4px; 
+                    font-weight: bold; 
+                    border-bottom: 2px solid #ddd; 
+                    margin-bottom: 8px;
+                    font-size: 12px;
+                    color: #666;
+                    width: fit-content;
+                `;
+                
+                // 항목 스타일
+                const itemStyle = `
+                    display: grid; 
+                    grid-template-columns: 20px minmax(120px, max-content) 60px 60px; 
+                    gap: 12px; 
+                    padding: 4px; 
+                    align-items: center;
+                    font-size: 13px;
+                    border-bottom: 1px solid #f0f0f0;
+                    width: fit-content;
+                `;
+
+                let legendHTML = `
+                    <div style="${headerStyle}">
+                        <div></div>
+                        <div>카테고리</div>
+                        <div style="text-align: right;">개수</div>
+                        <div style="text-align: right;">비율</div>
+                    </div>
+                `;
+
+                labels.forEach((label, i) => {
+                    const value = Number(data[i] || 0);
+                    const percent = total ? (value / total * 100) : 0;
+                    const color = colors[i % colors.length];
+                    const labelText = (label !== undefined && label !== null && label !== '') ? String(label) : '미정';
+                    
+                    legendHTML += `
+                        <div style="${itemStyle}" data-index="${i}">
+                            <div style="
+                                width: 16px; 
+                                height: 16px; 
+                                background-color: ${color}; 
+                                border: 1px solid #ccc; 
+                                border-radius: 2px;
+                                cursor: pointer;
+                            "></div>
+                            <div style="overflow: hidden; text-overflow: ellipsis; cursor: pointer;" title="${labelText}">${labelText}</div>
+                            <div style="text-align: right; font-weight: bold; cursor: pointer;">${value}</div>
+                            <div style="text-align: right; color: #666; cursor: pointer;">${percent.toFixed(1)}%</div>
+                        </div>
+                    `;
+                });
+
+                legendContainer.innerHTML = legendHTML;
+
+                // 범례 클릭 이벤트 추가 (차트 세그먼트 토글)
+                legendContainer.addEventListener('click', function(e) {
+                    const legendItem = e.target.closest('[data-index]');
+                    if (legendItem) {
+                        const index = parseInt(legendItem.dataset.index);
+                        const chart = Chart.getChart('categoryBugPieChart');
+                        if (chart) {
+                            const meta = chart.getDatasetMeta(0);
+                            if (meta.data[index]) {
+                                meta.data[index].hidden = !meta.data[index].hidden;
+                                chart.update();
+                                
+                                // 범례 아이템 스타일 업데이트
+                                const colorBox = legendItem.querySelector('div');
+                                const isHidden = meta.data[index].hidden;
+                                legendItem.style.opacity = isHidden ? '0.5' : '1';
+                                colorBox.style.backgroundColor = isHidden ? '#ccc' : colors[index % colors.length];
+                            }
+                        }
+                    }
+                });
+            }
+
+            // Chart.js 로드 후 렌더링
+            if (window.Chart) {
+                renderPie();
+            } else {
+                const script = document.createElement('script');
+                script.src = 'https://cdn.jsdelivr.net/npm/chart.js';
+                script.onload = renderPie;
+                document.head.appendChild(script);
+            }
+        })();
+        </script>
+    <% else %>
+        <em>표시할 데이터가 없습니다.</em>
+    <% end %>
+</div>
+
+
+
+<!-- 담당자별, 버전별 미해결 BUG 현황 -->
+<div style="margin-top: 30px;">
+    <h3>담당자별 미해결 BUG 현황</h3>
+    
+    <%
+      # 버그 유형 tracker_id 목록
+      bug_ids = Tracker.where(is_bug: true).pluck(:id)
+      
+      # 모든 버전 이름 수집 및 총합 계산
+      all_versions = @rest_bug_issues.values.flat_map(&:keys).uniq.sort_by { |version| version.to_i }
+      grand_total = @rest_bug_issues.values.sum { |versions| versions.values.sum }
+      
+      # 각 버전별 총합 계산 및 5% 이상인 버전만 필터링
+      significant_versions = all_versions.select do |version|
+        version_total = @rest_bug_issues.values.sum { |versions| versions[version] || 0 }
+        (version_total.to_f / grand_total * 100) >= 5.0
+      end
+      
+      # '미분류'가 significant_versions에 있으면 맨 뒤로 이동
+      if significant_versions.include?('미분류')
+        significant_versions.delete('미분류')
+        significant_versions << '미분류'
+      end
+    %>
+    
+    <% 
+      # 합계 링크에서 사용할 효과적 버전 ID 계산
+      effective_version_id = if params[:version_id].present? && params[:version_id] != 'all'
+                               params[:version_id]
+                             elsif params[:version_id].blank? && @project&.default_version&.id
+                               @project.default_version.id
+                             else
+                               nil
+                             end
+    %>
+    <table class="list">
+        <thead>
+            <tr>
+                 <th>담당자</th>
+                 <% significant_versions.each do |version_id| %>
+                     <th><%= version_id ? Version.find(version_id).name : '미분류' %></th>
+                 <% end %>
+                 <% if (all_versions - significant_versions).any? %>
+                     <th>기타</th>
+                 <% end %>
+                 <th>합계</th>
+            </tr>
+        </thead>
+         <tbody>
+             <% 
+                 # 담당자별 총 BUG 개수로 정렬 (내림차순)
+                 sorted_rest_bug_issues = @rest_bug_issues.sort_by { |assignee, versions| -versions.values.sum }
+                 
+                 # 상위 10위와 기타로 분리
+                 top_10 = sorted_rest_bug_issues.first(10)
+                 others = sorted_rest_bug_issues[10..-1] || []
+             %>
+             
+             <!-- 상위 10위 표시 -->
+             <% top_10.each do |assignee, versions| %>
+                <tr>
+                     <td><strong>
+                         <% if assignee %>
+                             <% if assignee.is_a?(Principal) %>
+                                 <%= link_to_principal(assignee) %>
+                             <% elsif assignee.is_a?(Integer) %>
+                                 <% user = User.find_by(id: assignee) %>
+                                 <%= user ? link_to_principal(user) : "User##{assignee}" %>
+                             <% else %>
+                                 <%= assignee.to_s %>
+                             <% end %>
+                         <% else %>
+                             미지정
+                         <% end %>
+                     </strong></td>
+                    <% 
+                        # 표시되는 버전들의 개수만 계산
+                        displayed_row_total = 0
+                        significant_versions.each do |version|
+                            count = versions[version] || 0
+                            displayed_row_total += count
+                    %>
+                         <td style="text-align: center;">
+                             <% if count > 0 && assignee %>
+                                 <%= link_to_bug_issues_count(bug_ids, count, assignee_id: (assignee.respond_to?(:id) ? assignee.id : assignee), version_ids: version) %>
+                             <% elsif count > 0 %>
+                                 <%= count %>
+                             <% else %>
+                                 -
+                             <% end %>
+                         </td>
+                    <% end %>
+                     
+                     <!-- 기타 버전들 합계 -->
+                     <% if (all_versions - significant_versions).any? %>
+                         <% 
+                             other_versions_total = (all_versions - significant_versions).sum { |version| versions[version] || 0 }
+                             other_version_ids = (all_versions - significant_versions).select { |v| v }
+                         %>
+                         <td style="text-align: center;">
+                             <% if other_versions_total > 0 && assignee %>
+                                 <%= link_to_bug_issues_count(bug_ids, other_versions_total, assignee_id: (assignee.respond_to?(:id) ? assignee.id : assignee), version_ids: other_version_ids) %>
+                             <% elsif other_versions_total > 0 %>
+                                 <%= other_versions_total %>
+                             <% else %>
+                                 -
+                             <% end %>
+                         </td>
+                     <% end %>
+                     
+                     <% 
+                         # 전체 담당자의 총 BUG 개수 (모든 버전 포함)
+                         actual_row_total = versions.values.sum
+                     %>
+                     <td style="text-align: center; font-weight: bold;">
+                         <% if actual_row_total > 0 && assignee %>
+                             <%= link_to_bug_issues_count(bug_ids, actual_row_total, assignee_id: (assignee.respond_to?(:id) ? assignee.id : assignee), version_ids: effective_version_id) %>
+                         <% else %>
+                             <%= actual_row_total %>
+                         <% end %>
+                     </td>
+                 </tr>
+             <% end %>
+             
+             <!-- 기타 (11위 이하) 행 -->
+             <% if others.any? %>
+                 <tr style="background-color: #f8f8f8; cursor: pointer;" onclick="toggleOthersRows()" id="others-summary-row">
+                     <td><strong>기타 (<%= others.size %>명) <span id="others-toggle-icon">▼</span></strong></td>
+                     <% 
+                         # 기타 그룹의 버전별 합계 계산
+                         others_by_version = {}
+                         significant_versions.each do |version|
+                             others_by_version[version] = others.sum { |assignee, versions| versions[version] || 0 }
+                         end
+                         
+                         # 기타 그룹의 전체 합계
+                         others_total = others.sum { |assignee, versions| versions.values.sum }
+                     %>
+                     <% significant_versions.each do |version| %>
+                         <td style="text-align: center;"><%= others_by_version[version] > 0 ? others_by_version[version] : '-' %></td>
+                     <% end %>
+                     
+                     <!-- 기타 그룹의 기타 버전들 합계 -->
+                     <% if (all_versions - significant_versions).any? %>
+                         <% 
+                             others_other_versions_total = (all_versions - significant_versions).sum do |version|
+                                 others.sum { |assignee, versions| versions[version] || 0 }
+                             end
+                         %>
+                         <td style="text-align: center;"><%= others_other_versions_total > 0 ? others_other_versions_total : '-' %></td>
+                     <% end %>
+                     
+                      <td style="text-align: center; font-weight: bold;"><%= others_total %></td>
+                 </tr>
+                 
+                 <!-- 기타 그룹의 개별 담당자들 (기본적으로 숨김) -->
+                 <% others.each_with_index do |(assignee, versions), index| %>
+                     <tr class="others-detail-row" style="display: none; background-color: #fafafa;">
+                         <td style="padding-left: 20px;">
+                             <% if assignee %>
+                                 <% if assignee.is_a?(Principal) %>
+                                     <%= link_to_principal(assignee) %>
+                                 <% elsif assignee.is_a?(Integer) %>
+                                     <% user = User.find_by(id: assignee) %>
+                                     <%= user ? link_to_principal(user) : "User##{assignee}" %>
+                                 <% else %>
+                                     <%= assignee.to_s %>
+                                 <% end %>
+                             <% else %>
+                                 미지정
+                             <% end %>
+                         </td>
+                         <% significant_versions.each do |version| %>
+                             <% 
+                                 count = versions[version] || 0
+                             %>
+                             <td style="text-align: center;">
+                                 <% if count > 0 && assignee %>
+                                     <%= link_to_bug_issues_count(bug_ids, count, assignee_id: (assignee.respond_to?(:id) ? assignee.id : assignee), version_ids: version) %>
+                                 <% elsif count > 0 %>
+                                     <%= count %>
+                                 <% else %>
+                                     -
+                                 <% end %>
+                             </td>
+                         <% end %>
+                         
+                         <!-- 기타 버전들 합계 -->
+                         <% if (all_versions - significant_versions).any? %>
+                             <% 
+                                 other_versions_total = (all_versions - significant_versions).sum { |v| versions[v] || 0 }
+                                 other_version_ids = (all_versions - significant_versions).select { |v| v }
+                             %>
+                             <td style="text-align: center;">
+                                 <% if other_versions_total > 0 && assignee %>
+                                     <%= link_to_bug_issues_count(bug_ids, other_versions_total, assignee_id: (assignee.respond_to?(:id) ? assignee.id : assignee), version_ids: other_version_ids) %>
+                                 <% elsif other_versions_total > 0 %>
+                                     <%= other_versions_total %>
+                                 <% else %>
+                                     -
+                                 <% end %>
+                             </td>
+                         <% end %>
+                         
+                         <td style="text-align: center; font-weight: bold;">
+                             <% 
+                                 total_count = versions.values.sum
+                             %>
+                             <% if total_count > 0 && assignee %>
+                                 <%= link_to_bug_issues_count(bug_ids, total_count, assignee_id: (assignee.respond_to?(:id) ? assignee.id : assignee), version_ids: effective_version_id) %>
+                             <% else %>
+                                 <%= total_count %>
+                             <% end %>
+                         </td>
+                     </tr>
+                 <% end %>
+             <% end %>
+             
+             <!-- 합계 행 -->
+            <tr style="background-color: #f0f0f0; font-weight: bold;">
+                <td>합계</td>
+                <% 
+                    displayed_total = 0
+                    significant_versions.each do |version|
+                        column_total = @rest_bug_issues.values.sum { |versions| versions[version] || 0 }
+                        displayed_total += column_total
+                %>
+                    <td style="text-align: center;">
+                        <% if column_total > 0 %>
+                            <%= link_to_bug_issues_count(bug_ids, column_total, version_ids: version) %>
+                        <% else %>
+                            0
+                        <% end %>
+                    </td>
+                <% end %>
+                
+                <!-- 기타 버전들의 총합 -->
+                <% if (all_versions - significant_versions).any? %>
+                    <% 
+                        other_versions_grand_total = (all_versions - significant_versions).sum do |version|
+                            @rest_bug_issues.values.sum { |versions| versions[version] || 0 }
+                        end
+                        other_version_ids = (all_versions - significant_versions).select { |v| v }
+                    %>
+                    <td style="text-align: center;">
+                        <% if other_versions_grand_total > 0 %>
+                            <%= link_to_bug_issues_count(bug_ids, other_versions_grand_total, version_ids: other_version_ids) %>
+                        <% else %>
+                            0
+                        <% end %>
+                    </td>
+                <% end %>
+                
+                <td style="text-align: center;">
+                    <% if grand_total > 0 %>
+                        <%= link_to_bug_issues_count(bug_ids, grand_total, version_ids: effective_version_id) %>
+                    <% else %>
+                        0
+                    <% end %>
+                </td>
+            </tr>
+        </tbody>
+    </table>
+</div>
+
+
+
+<script>
+function toggleOthersRows() {
+    const detailRows = document.querySelectorAll('.others-detail-row');
+    const toggleIcon = document.getElementById('others-toggle-icon');
+    const isHidden = detailRows[0].style.display === 'none';
+    
+    detailRows.forEach(row => {
+        row.style.display = isHidden ? 'table-row' : 'none';
+    });
+    
+    toggleIcon.textContent = isHidden ? '▲' : '▼';
+}
+</script>
+
+<script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+<script>
+// BUG 데이터 준비
+<%
+  # 오늘의 잔여 버그 개수
+  today_remaining_bugs = @rest_issue_count_per_category['BUG'] || 0
+  
+  bug_data = []
+  remaining_bugs = today_remaining_bugs
+  
+  @issues_by_days.each do |day_data|
+    bug_category = day_data[:issues_by_category]['BUG']
+    created = bug_category ? bug_category[:created] : 0
+    completed = bug_category ? bug_category[:completed] : 0
+
+    bug_data << {
+      date: day_data[:day].strftime('%m-%d'),
+      created: created,
+      completed: completed,
+      remaining: remaining_bugs
+    }
+
+    # 한 단계 과거로 이동: 오늘 기준 잔여에서 (그 날 해결 수)를 더하고 (그 날 생성 수)를 뺌
+    remaining_bugs = remaining_bugs + completed - created
+  end
+  bug_data.reverse!
+%>
+
+const bugData = <%= raw bug_data.to_json %>;
+const labels = bugData.map(item => item.date);
+const createdData = bugData.map(item => item.created);
+const completedData = bugData.map(item => item.completed);
+const remainingData = bugData.map(item => item.remaining);
+const fixingBugsCount = <%= fixing_bugs ? fixing_bugs.size : 0 %>;
+
+const ctx = document.getElementById('bugTrendChart').getContext('2d');
+
+// 반짝이는 효과를 위한 CSS 애니메이션 추가
+const sparkleStyle = document.createElement('style');
+sparkleStyle.textContent = `
+    @keyframes sparkle {
+        0%, 100% { opacity: 0.3; }
+        50% { opacity: 0.9; }
+    }
+`;
+document.head.appendChild(sparkleStyle);
+
+// 막대/선 그래프에 수치 라벨을 표시하는 커스텀 플러그인
+const trendValueLabelPlugin = {
+    id: 'trendValueLabelPlugin',
+    afterDatasetsDraw(chart, args, pluginOptions) {
+        const ctx = chart.ctx;
+        const datasets = chart.data && chart.data.datasets ? chart.data.datasets : [];
+        if (datasets.length < 3) return;
+
+        const metaCreated = chart.getDatasetMeta(0);   // 생성 라인
+        const metaCompleted = chart.getDatasetMeta(1); // 해결 라인
+        const metaBar = chart.getDatasetMeta(2);       // 잔여 막대
+        if (!metaCreated || !metaCompleted || !metaBar) return;
+
+        const valuesCreated = Array.isArray(datasets[0].data) ? datasets[0].data : [];
+        const valuesCompleted = Array.isArray(datasets[1].data) ? datasets[1].data : [];
+        const valuesBar = Array.isArray(datasets[2].data) ? datasets[2].data : [];
+
+        const colorCreated = datasets[0].borderColor || 'rgb(255, 99, 132)';
+        const colorCompleted = datasets[1].borderColor || 'rgb(54, 162, 235)';
+        const colorBar = datasets[2].borderColor || 'rgb(255, 206, 86)';
+
+        const xScale = chart.scales.x;
+        const yScaleLine = chart.scales.y;
+        const yScaleBar = chart.scales[datasets[2].yAxisID || 'y'];
+        if (!xScale || !yScaleLine || !yScaleBar) return;
+
+        const count = Math.max(valuesCreated.length, valuesCompleted.length, valuesBar.length);
+        ctx.save();
+        ctx.font = 'bold 10px sans-serif';
+        ctx.textAlign = 'center';
+        ctx.textBaseline = 'bottom';
+
+        for (let i = 0; i < count; i++) {
+            const x = (metaCreated.data[i] && metaCreated.data[i].x) || (metaBar.data[i] && metaBar.data[i].x) || xScale.getPixelForValue(i);
+
+            const vBar = Number(valuesBar[i] || 0);
+            const vCreated = Number(valuesCreated[i] || 0);
+            const vCompleted = Number(valuesCompleted[i] || 0);
+
+            // 값이 모두 0이면 스킵
+            if ((vBar || 0) === 0 && (vCreated || 0) === 0 && (vCompleted || 0) === 0) continue;
+
+            // 각 기준 y 좌표 계산 (살짝 위로 오프셋)
+            const yBar = yScaleBar.getPixelForValue(vBar) - 6;
+            const yCreated = yScaleLine.getPixelForValue(vCreated) - 6;
+            const yCompleted = yScaleLine.getPixelForValue(vCompleted) - 6;
+
+            // 동일 날짜에서 라벨 간 겹침 방지: 최소 간격 12px 확보
+            const labels = [];
+            if (vBar !== 0) {
+                labels.push({ text: String(vBar), x, y: yBar, color: colorBar });
+                // 가장 최근 날짜(마지막 인덱스)에서 수정 중인 버그 개수 표시
+                if (i === count - 1 && fixingBugsCount > 0) {
+                    labels.push({ text: `(수정중 : ${fixingBugsCount})`, x, y: yBar - 14, color: '#888888' });
+                }
+            }
+            if (vCreated !== 0) labels.push({ text: String(vCreated), x, y: yCreated, color: colorCreated });
+            if (vCompleted !== 0) labels.push({ text: String(vCompleted), x, y: yCompleted, color: colorCompleted });
+
+            labels.sort((a, b) => a.y - b.y); // 위에서 아래 순서
+            const minGap = 12;
+            for (let k = 1; k < labels.length; k++) {
+                if (labels[k].y - labels[k - 1].y < minGap) {
+                    labels[k].y = labels[k - 1].y + minGap;
+                }
+            }
+
+            // 흰색 외곽선 후 채우기 (가독성)
+            labels.forEach(lab => {
+                ctx.strokeStyle = 'rgba(255,255,255,0.95)';
+                ctx.lineWidth = 3;
+                ctx.strokeText(lab.text, lab.x, lab.y);
+                ctx.fillStyle = Array.isArray(lab.color) ? lab.color[0] : lab.color;
+                ctx.fillText(lab.text, lab.x, lab.y);
+            });
+        }
+
+        ctx.restore();
+    }
+};
+
+// 수정중인 버그 개수만큼 반짝이는 오버레이를 그리는 플러그인
+const sparkleOverlayPlugin = {
+    id: 'sparkleOverlayPlugin',
+    afterDatasetsDraw(chart, args, pluginOptions) {
+        const ctx = chart.ctx;
+        const datasets = chart.data && chart.data.datasets ? chart.data.datasets : [];
+        if (datasets.length < 3 || fixingBugsCount <= 0) return;
+
+        const metaBar = chart.getDatasetMeta(2); // 잔여 막대
+        if (!metaBar || !metaBar.data) return;
+
+        const yScaleBar = chart.scales[datasets[2].yAxisID || 'y'];
+        if (!yScaleBar) return;
+
+        const lastBarIndex = metaBar.data.length - 1;
+        const lastBar = metaBar.data[lastBarIndex];
+        if (!lastBar) return;
+
+        const remainingValue = datasets[2].data[lastBarIndex] || 0;
+        if (remainingValue <= 0) return;
+
+        // 반짝이는 효과의 투명도 계산 (시간 기반)
+        const time = Date.now() * 0.009; // 속도 두배로 증가
+        const sparkleOpacity = 0.3 + 0.4 * (Math.sin(time) * 0.5 + 0.5);
+
+        ctx.save();
+
+        // 수정중인 버그 비율 계산
+        const fixingRatio = Math.min(fixingBugsCount / remainingValue, 1);
+        
+        // 바의 위치와 크기 정보
+        const barLeft = lastBar.x - lastBar.width / 2;
+        const barRight = lastBar.x + lastBar.width / 2;
+        const barTop = lastBar.y;
+        const barBottom = yScaleBar.getPixelForValue(0);
+        
+        // 반짝이는 영역 높이 (수정중인 버그 비율만큼)
+        const sparkleHeight = (barBottom - barTop) * fixingRatio;
+        const sparkleTop = barTop; // 바의 상단부터 시작
+
+        // 단순한 밝은 사각형 반짝이는 오버레이
+        ctx.fillStyle = `rgba(255, 255, 190, ${sparkleOpacity})`;
+        ctx.fillRect(barLeft, sparkleTop, barRight - barLeft, sparkleHeight);
+
+        ctx.restore();
+    }
+};
+
+const bugTrendChart = new Chart(ctx, {
+    type: 'line',
+    data: {
+        labels: labels,
+        datasets: [
+            {
+                label: '생성된 BUG',
+                data: createdData,
+                borderColor: 'rgb(255, 99, 132)',
+                backgroundColor: 'rgba(255, 99, 132, 0.1)',
+                tension: 0.1,
+                fill: false,
+                type: 'line'
+            },
+            {
+                label: '해결된 BUG',
+                data: completedData,
+                borderColor: 'rgb(54, 162, 235)',
+                backgroundColor: 'rgba(54, 162, 235, 0.1)',
+                tension: 0.1,
+                fill: false,
+                type: 'line'
+            },
+            {
+                label: '잔여 BUG',
+                data: remainingData,
+                backgroundColor: 'rgba(255, 206, 86, 0.6)',
+                borderColor: 'rgb(255, 206, 86)',
+                borderWidth: 1,
+                type: 'bar',
+                yAxisID: 'y1',
+                barPercentage: 0.3
+            }
+        ]
+    },
+    plugins: [trendValueLabelPlugin, sparkleOverlayPlugin],
+    options: {
+        responsive: true,
+        plugins: {
+            title: {
+                display: true,
+                text: 'BUG 타입 일별 추이'
+            },
+            legend: {
+                display: true,
+                position: 'top'
+            }
+        },
+        scales: {
+            y: {
+                beginAtZero: true,
+                position: 'left',
+                title: {
+                    display: true,
+                    text: '일일 이슈 개수'
+                },
+                max: Math.max(...createdData, ...completedData) * 1.2
+            },
+            y1: {
+                beginAtZero: true,
+                position: 'right',
+                title: {
+                    display: true,
+                    text: '잔여 BUG 개수'
+                },
+                grid: {
+                    drawOnChartArea: false,
+                },
+                max: Math.max(...remainingData) * 1.2
+            },
+            x: {
+                title: {
+                    display: true,
+                    text: '날짜'
+                }
+            }
+        },
+        interaction: {
+            intersect: false,
+            mode: 'index'
+        }
+    }
+});
+
+// 반짝이는 효과를 위한 애니메이션 루프
+if (fixingBugsCount > 0) {
+    function animateSparkle() {
+        bugTrendChart.update('none'); // 애니메이션 없이 업데이트
+        requestAnimationFrame(animateSparkle);
+    }
+    animateSparkle();
+}
+</script>
+
+<h3>잔여 버그들 (<%= rest_bug_issues.size %>)</h3>
+<% 
+  columns = [:id, :tracker, :priority, :assigned_to, :status, :subject, :fixed_version, :done_ratio, :due_date, :updated_on]
+  if params[:version_id].present? && params[:version_id] != 'all'
+    columns.delete(:fixed_version)
+  end
+%>
+<%= render partial: 'milestone/issue_list', locals: { issues: rest_bug_issues, page_size: 20, columns: columns } %>
