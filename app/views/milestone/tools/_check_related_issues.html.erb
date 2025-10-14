@@ -38,7 +38,7 @@
             후행일감 :
             <ul>
             <% issue.follow_issues.each do |follow_issue| %>
-              <li><span id="issue-<%= follow_issue.id %>" class="subject hascontextmenu"><%= link_to "##{follow_issue.id} #{follow_issue.subject}", issue_path(follow_issue), "data-id": follow_issue.id %></span></li>
+              <li><span id="issue-<%= follow_issue.id %>" class="subject hascontextmenu"><%= link_to_issue_with_id(follow_issue, "data-id": follow_issue.id) %></span></li>
             <% end %>
             </ul>
         </div>

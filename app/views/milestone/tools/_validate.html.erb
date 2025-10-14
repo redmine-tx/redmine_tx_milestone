@@ -36,14 +36,20 @@
     <ul>
       <% parent_issues.each do |issue| %>
                
-               <li> <span class="tag-label-color" style="background-color: <%= get_version_color(versions[issue.fixed_version_id]) %>"><%= link_to(versions[issue.fixed_version_id].name, "/versions/#{issue.fixed_version_id}") %></span> <%= link_to("##{issue.id} #{issue.subject}", "/issues/#{issue.id}") %>
+               <li> <span class="tag-label-color" style="background-color: <%= get_version_color(versions[issue.fixed_version_id]) %>"><%= link_to(versions[issue.fixed_version_id].name, version_path(issue.fixed_version_id)) %></span> <%= link_to_issue_with_id(issue, subject: false) %>
   
                   <% childs = issue.children.select { |c| c.fixed_version_id != issue.fixed_version_id }
   
                   if childs.size > 0 then %>
                       <ul>
                           <% childs.each do |child| %>
-                              <li> <span class="tag-label-color" style="background-color: #8ae"><%= link_to( versions[child.fixed_version_id] ? versions[child.fixed_version_id].name : '???', "/versions/#{child.fixed_version_id}") %></span> <%= link_to("##{child.id} #{child.subject}", "/issues/#{child.id}") %>
+                              <li> <span class="tag-label-color" style="background-color: #8ae">
+                                <% if child.fixed_version_id && versions[child.fixed_version_id] %>
+                                  <%= link_to(versions[child.fixed_version_id].name, version_path(child.fixed_version_id)) %>
+                                <% else %>
+                                  ???
+                                <% end %>
+                              </span> <%= link_to_issue_with_id(child, subject: false) %>
                           <% end %>
                       </ul>
                   <% end %>

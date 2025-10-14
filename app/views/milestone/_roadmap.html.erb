@@ -425,22 +425,6 @@ function registerEventHandlers() {
     hideEventPopup();
   });
 
-  // ESC 키로 팝업 닫기
-  $(document).keydown(function(e) {
-    if (e.key === 'Escape') {
-      if ($('#scheduleEditPopup').hasClass('show')) {
-        hideScheduleEditPopup();
-      } else if ($('#schedulePopup').hasClass('show')) {
-        hideSchedulePopup();
-      } else if ($('#eventPopup').hasClass('show')) {
-        hideEventPopup();
-      } else if ($('#colorPickerPopup').hasClass('show')) {
-        hideColorPickerPopup();
-      }
-    }
-  });
-
-
   // ================================
   // 로드맵 탭 관련 이벤트 핸들러
   // ================================
@@ -522,6 +506,11 @@ $(document).ready(function() {
     applyImportedData(window.initialRoadmapData);
     console.log('초기 페이지 구성 완료');
   }
+  
+  // 기존 스케쥴바들에 이슈 링크 아이콘 추가
+  setTimeout(function() {
+    addIssueLinkIconsToExistingBars();
+  }, 200);
   
   // body에 클래스 추가로 전체 페이지 스크롤 제어
   $('body').addClass('roadmap-view');
@@ -870,21 +859,6 @@ $(document).ready(function() {
   $('#colorPickerPopup').click(function(e) {
     if (e.target === this) {
       hideColorPickerPopup();
-    }
-  });
-
-  // ESC 키로 팝업 닫기
-  $(document).keydown(function(e) {
-    if (e.key === 'Escape') {
-      if ($('#scheduleEditPopup').hasClass('show')) {
-        hideScheduleEditPopup();
-      } else if ($('#schedulePopup').hasClass('show')) {
-        hideSchedulePopup();
-      } else if ($('#eventPopup').hasClass('show')) {
-        hideEventPopup();
-      } else if ($('#colorPickerPopup').hasClass('show')) {
-        hideColorPickerPopup();
-      }
     }
   });
 
@@ -1326,6 +1300,9 @@ $(document).ready(function() {
         displayName += ' (' + scheduleData.done_ratio + '%)';
       }
       
+      // 이슈 링크 아이콘 HTML (공통 함수 사용)
+      var issueLinkIcon = generateIssueLinkIcon(scheduleData.issue);
+      
       var newScheduleBarHtml = '<div class="' + barClass + '" ' +
         'style="' + barStyle + '" ' +
         'title="' + scheduleData.name + ' (' + formatLocalDate(scheduleData.start_date) + ' ~ ' + formatLocalDate(scheduleData.end_date) + ')" ' +
@@ -1333,6 +1310,7 @@ $(document).ready(function() {
         'data-issue-number="' + scheduleData.issue + '" ' +
         'data-done-ratio="' + scheduleData.done_ratio + '">' +
         '<span class="project-bar-text">' + displayName.replace(/\n/g, '<br>') + '</span>' +
+        issueLinkIcon +
         '</div>';
       
       // 타임라인 행에 추가
@@ -1343,6 +1321,7 @@ $(document).ready(function() {
       applyDraggableToElements(newBar);
       
       console.log('새 스케줄 바 추가됨');
+      
       
       // 사이드바의 스케줄 개수 업데이트
       updateEventScheduleCount(scheduleInfo.eventName, scheduleInfo.categoryName);
@@ -1450,7 +1429,7 @@ $(document).ready(function() {
     var timelineRow = scheduleBar.closest('.timeline-row');
     var eventName = timelineRow.data('event-name');
     var categoryName = timelineRow.data('category-name');
-    var scheduleName = scheduleBar.text().trim();
+    var scheduleName = scheduleBar.find('.project-bar-text').text().trim();
     
     console.log('스케줄 바 우클릭:', {
       event: eventName,
@@ -1778,6 +1757,23 @@ $(document).ready(function() {
     delete scheduleColors[scheduleKey];
   });
 
+  // 이슈 링크 아이콘 클릭 이벤트 (드래그 방해 방지)
+  $(document).on('click', '.issue-link-icon', function(e) {
+    e.preventDefault();
+    e.stopPropagation();
+    
+    var issueNumber = $(this).closest('.project-bar').attr('data-issue-number');
+    if (issueNumber) {
+      var issueUrl = '/issues/' + issueNumber;
+      window.open(issueUrl, '_blank');
+    }
+  });
+
+  // 이슈 링크 아이콘에서 드래그 시작 방지
+  $(document).on('mousedown', '.issue-link-icon', function(e) {
+    e.stopPropagation();
+  });
+
   
 
   // 카테고리의 모든 이벤트 스케줄 바 색상 업데이트 함수
@@ -1840,10 +1836,21 @@ $(document).ready(function() {
       });
     });
   }
-  
-  
- 
 
+  // ESC 키로 팝업 닫기 (모든 함수 정의 후에 배치)
+  $(document).keydown(function(e) {
+    if (e.key === 'Escape') {
+      if ($('#scheduleEditPopup').hasClass('show')) {
+        hideScheduleEditPopup();
+      } else if ($('#schedulePopup').hasClass('show')) {
+        hideSchedulePopup();
+      } else if ($('#eventPopup').hasClass('show')) {
+        hideEventPopup();
+      } else if ($('#colorPickerPopup').hasClass('show')) {
+        hideColorPickerPopup();
+      }
+    }
+  });
 
 });
 </script>

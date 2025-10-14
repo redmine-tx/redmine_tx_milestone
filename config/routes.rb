@@ -33,6 +33,8 @@ resources :projects do
       get 'tools/delayed_issues', to: 'milestone#tools', tool: 'delayed_issues'
       get 'tools/check_related_issues', to: 'milestone#tools', tool: 'check_related_issues'
       get 'report', to: 'milestone#report'
+      get 'report/issues', to: 'milestone#report', report_type: 'issues'
+      get 'report/bugs', to: 'milestone#report', report_type: 'bugs'
       # 기존 issue_detail 라우트는 제거됨
     end
   end

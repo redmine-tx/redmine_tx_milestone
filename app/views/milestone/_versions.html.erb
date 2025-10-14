@@ -10,7 +10,8 @@
 <%
   versions = Version.where( "effective_date IS NOT NULL" ).open.order( :effective_date ).to_a
   if @project then
-    versions = versions.select { |v| v.project_id == @project.id }
+    new_versions = versions.select { |v| v.project_id == @project.id }
+    versions = new_versions unless new_versions.empty?
   end
   versions = versions[0..15]
   

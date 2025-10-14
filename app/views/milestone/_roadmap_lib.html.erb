@@ -252,6 +252,9 @@ function parseLocalDate(dateString) {
                 barStyle += ' background-color: ' + appliedColor + ';';
               }
               
+              // 이슈 링크 아이콘 HTML (공통 함수 사용)
+              var issueLinkIcon = generateIssueLinkIcon(scheduleData.issue);
+              
               var scheduleBarHtml = '<div class="' + barClass + '" ' +
                 'style="' + barStyle + '" ' +
                 'title="' + scheduleData.name + ' (' + scheduleData.startDate + ' ~ ' + scheduleData.endDate + ')" ' +
@@ -259,6 +262,7 @@ function parseLocalDate(dateString) {
                 'data-issue-number="' + scheduleData.issue + '" ' +
                 'data-done-ratio="' + (scheduleData.doneRatio || '') + '">' +
                 '<span class="project-bar-text">' + (scheduleData.name.length > 20 ? scheduleData.name.substring(0, 20) + '...' : scheduleData.name).replace(/\n/g, '<br>') + '</span>' +
+                issueLinkIcon +
                 '</div>';
               
               timelineRow.append(scheduleBarHtml);
@@ -281,6 +285,34 @@ function parseLocalDate(dateString) {
     }, 100);
     
     console.log('불러온 데이터 적용 완료');
+  }
+
+  // 이슈 링크 아이콘 HTML 생성 함수 (공통)
+  function generateIssueLinkIcon(issueNumber) {
+    if (!issueNumber || issueNumber.trim() === '') {
+      return '';
+    }
+    
+    return '<a href="/issues/' + issueNumber + '" class="issue-link-icon" target="_blank" title="" data-issue-tooltip="' + issueNumber + '">' +
+      '<span class="issue-link-symbol">🔗</span>' +
+      '</a>';
+  }
+
+  // 기존 스케쥴바들에 이슈 링크 아이콘 추가하는 함수
+  function addIssueLinkIconsToExistingBars() {
+    $('.project-bar').each(function() {
+      var $bar = $(this);
+      var issueNumber = $bar.attr('data-issue-number');
+      
+      // 이미 이슈 링크 아이콘이 있거나 이슈 번호가 없으면 스킵
+      if ($bar.find('.issue-link-icon').length > 0 || !issueNumber || issueNumber.trim() === '') {
+        return;
+      }
+      
+      // 공통 함수를 사용하여 이슈 링크 아이콘 추가
+      var issueLinkIcon = generateIssueLinkIcon(issueNumber);
+      $bar.append(issueLinkIcon);
+    });
   }
 
 
@@ -1105,6 +1137,15 @@ function parseLocalDate(dateString) {
     
     // 이슈 번호를 data 속성으로 저장
     scheduleBar.attr('data-issue-number', scheduleData.issue);
+    
+    // 기존 이슈 링크 아이콘 제거
+    scheduleBar.find('.issue-link-icon').remove();
+    
+    // 이슈 링크 아이콘 추가 (공통 함수 사용)
+    var issueLinkIcon = generateIssueLinkIcon(scheduleData.issue);
+    if (issueLinkIcon) {
+      scheduleBar.append(issueLinkIcon);
+    }
     
     console.log('스케줄 바 업데이트 완료:', scheduleData.name);
     

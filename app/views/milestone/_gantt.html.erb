@@ -18,6 +18,7 @@
 
         due_date = main_issue.fixed_version ? main_issue.fixed_version.effective_date : main_issue.due_date
     %>
+    <% html_title("##{main_issue.id} [#{main_issue.tracker.name}] #{main_issue.subject.to_s}") %>
 
     <%= render :partial => 'milestone/gantt_chart', locals: { title: '주요 일감', issues: issues, due_date:due_date, date_marks: version.marks, gantt_opts: { show_status_history: false } } %>
 

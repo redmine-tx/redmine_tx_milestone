@@ -36,66 +36,39 @@ class MilestoneController < ApplicationController
     end
 
     def report
-
       today = Date.today
+      report_type = params[:report_type]
+      # version_id가 'all'이면 버전 필터 제거, 없으면 프로젝트의 기본 버전을 사용
+      version_id_param = params[:version_id]
+      version_id = if version_id_param == 'all'
+                     nil
+                   else
+                     (version_id_param.presence || @project&.default_version&.id)
+                   end
       
-      # 캐시 키 생성 - 프로젝트 ID와 날짜를 포함
-      cache_key = "milestone_report_5#{@project.id}_#{today.strftime('%Y-%m-%d_%H-%M')}"
-      
-      @issues_by_days, @avarage_hours_per_category = Rails.cache.fetch(cache_key, expires_in: 5.minutes) do
+      # 캐시 키에 report_type 포함
+      cache_key = "_milestone_report_#{@project.id}_#{version_id}_#{today.strftime('%Y-%m-%d_%H-%M')}_#{report_type}"
+      expires_in = if Rails.env.development?
+                     1.second
+                   else
+                     5.minutes
+                   end
 
-        categories = IssueCategory.all.pluck(:id, :name).to_h        
-
-        tracker_ids = Tracker.where( is_sidejob: false ).where( is_exception: false ).pluck(:id)        
-        bug_ids = Tracker.where( is_bug: true ).pluck(:id)
-
-        issues = Issue.where( project_id: @project.id ).where( tracker_id: tracker_ids ).where( 'created_on >= ? OR end_time >= ?', Date.today - 1.year, Date.today - 1.year )
-        issues_by_days = []
-
-        (0..13).each { |day|
-            created_issues = issues.select { |issue| issue.created_on.present? && issue.created_on >= today - day.days && issue.created_on <= today - (day - 1).days }
-            completed_issues = issues.select { |issue| issue.end_time.present? && issue.end_time >= today - day.days && issue.end_time <= today - (day - 1).days }
-
-            issues_by_category = { 'BUG' => { created: 0, completed: 0 } }
-
-            created_issues.each { |issue|
-              next unless issue.category_id
-              category_name = categories[issue.category_id]
-              category_name = 'BUG' if bug_ids.include?(issue.tracker_id)
-              next unless category_name  # nil 체크 추가              
-              issues_by_category[category_name] ||= { created: 0, completed: 0 }
-              issues_by_category[category_name][:created] += 1
-            }
-
-            completed_issues.each { |issue|
-              next unless issue.category_id
-              category_name = categories[issue.category_id]
-              category_name = 'BUG' if bug_ids.include?(issue.tracker_id)
-              next unless category_name  # nil 체크 추가              
-              issues_by_category[category_name] ||= { created: 0, completed: 0 }
-              issues_by_category[category_name][:completed] += 1
-            }          
-
-            issues_by_days.push( {day: Date.today - day.days, created: created_issues.size, completed: completed_issues.size, issues_by_category: issues_by_category} )
-        }
-
-        avarage_hours_per_category = { 'BUG' => 0 }
-        avarage_count_per_category = { 'BUG' => 0 }
-        issues.where.not( begin_time: nil ).where.not( end_time: nil ).each { |issue|
-          next unless issue.category_id
-          category_name = categories[issue.category_id]
-          category_name = 'BUG' if bug_ids.include?(issue.tracker_id)
-          next unless category_name  # nil 체크 추가
-          next if issue.end_time - issue.begin_time >= 1.year
-          avarage_hours_per_category[category_name] ||= 0
-          avarage_hours_per_category[category_name] += ( issue.end_time - issue.begin_time ).to_i
-          avarage_count_per_category[category_name] ||= 0
-          avarage_count_per_category[category_name] += 1
-        }
-
-        [ issues_by_days, avarage_hours_per_category.map { |category_name, hours| [ category_name, (hours / avarage_count_per_category[category_name])/3600 ] }.to_h ]
+      case report_type
+      when 'issues'
+        @issues_by_days, @avarage_hours_per_category, @rest_issue_count_per_category, @updated_at = Rails.cache.fetch(cache_key, expires_in: expires_in) do
+          process_issues_data(today, version_id)
+        end
+      when 'bugs'
+        @issues_by_days, @rest_issue_count_per_category, @rest_bug_issues, @rest_bug_count_per_category, @all_bug_issues, @updated_at = Rails.cache.fetch(cache_key, expires_in: 5.minutes) do
+          process_bugs_data(today, version_id)
+        end
+      else
+        # 웰컴 페이지는 기본 통계만
+        @basic_stats, @updated_at = Rails.cache.fetch(cache_key, expires_in: 5.minutes) do
+          process_welcome_data(today, version_id)
+        end
       end
-
     end
 
     def roadmap
@@ -164,7 +137,7 @@ class MilestoneController < ApplicationController
 
         @result_issues = target_issues
 
-        flash[:notice] = "#{issues.count}개 일감의 일정을 아래와 같이 제안 합니다.<br>저장하시려면 위 일정으로 확정 버튼을 클릭해 주세요.".html_safe
+        flash[:notice] = "#{target_issues.count}개 일감의 일정을 아래와 같이 제안 합니다.<br>저장하시려면 위 일정으로 확정 버튼을 클릭해 주세요.".html_safe
         
       # 요청된 일감 정보대로 일정을 저장.
       elsif params[:save_schedule] == 'true' && params[:issue_data].present?
@@ -369,6 +342,265 @@ def create_roadmap
 end
   
     private
+
+  # 공통으로 사용되는 기본 데이터
+  def get_base_data
+    categories = IssueCategory.where(project_id: @project.id).pluck(:id, :name).to_h
+    tracker_ids = Tracker.where(is_sidejob: false, is_exception: false).pluck(:id)
+    bug_ids = Tracker.where(is_bug: true).pluck(:id)
+    discarded_ids = IssueStatus.discarded_ids
+    
+    {
+      categories: categories,
+      tracker_ids: tracker_ids,
+      bug_ids: bug_ids,
+      discarded_ids: discarded_ids
+    }
+  end
+
+  # 일반 일감 데이터 조회
+  def get_issues_data(base_data, version_id)
+    all_issues = Issue.where(project_id: @project.id)
+                     .where(tracker_id: base_data[:tracker_ids])
+                     .where.not(status_id: base_data[:discarded_ids])
+    all_issues = all_issues.where(fixed_version_id: version_id) if version_id
+    
+    all_completed_issues = all_issues.where.not(end_time: nil)
+    issues = all_issues.where('created_on >= ? OR end_time >= ?', Date.today - 1.year, Date.today - 1.year)
+    
+    {
+      all_issues: all_issues,
+      all_completed_issues: all_completed_issues,
+      issues: issues
+    }
+  end
+
+  # 버그 데이터 조회
+  def get_bug_data(base_data, version_id)
+    all_bug_issues = Issue.where(tracker_id: base_data[:bug_ids])
+                         .where.not(status_id: base_data[:discarded_ids])
+    all_bug_issues = all_bug_issues.where(fixed_version_id: version_id) if version_id
+    
+    all_bug_completed_issues = all_bug_issues.where.not(end_time: nil)
+    bug_issues = all_bug_issues.where('created_on >= ? OR end_time >= ?', Date.today - 1.year, Date.today - 1.year)
+    
+    {
+      all_bug_issues: all_bug_issues,
+      all_bug_completed_issues: all_bug_completed_issues,
+      bug_issues: bug_issues
+    }
+  end
+
+  # 일별 통계 계산
+  def calculate_daily_stats(today, issues, bug_issues, categories, all_issues = nil, all_bug_issues = nil, include_bugs: true)
+    issues_by_days = []
+    
+    (0..11).each do |day|
+      created_issues = issues.select { |issue| issue.created_on.present? && issue.created_on >= today - day.days && issue.created_on <= today - (day - 1).days }
+      completed_issues = issues.select { |issue| issue.end_time.present? && issue.end_time >= today - day.days && issue.end_time <= today - (day - 1).days }
+      
+      issues_by_category = {}
+      
+      # 일반 일감 카테고리별 집계
+      categories.each do |id, category_name|
+        issues_by_category[category_name] ||= { all: 0, created: 0, completed: 0 }
+        # 전체 일감 개수 계산
+        if all_issues
+          issues_by_category[category_name][:all] = all_issues.where(category_id: id).size
+        end
+      end
+      
+      created_issues.each do |issue|
+        next unless issue.category_id
+        category_name = categories[issue.category_id]
+        next unless category_name
+        issues_by_category[category_name][:created] += 1
+      end
+      
+      completed_issues.each do |issue|
+        next unless issue.category_id
+        category_name = categories[issue.category_id]
+        next unless category_name
+        issues_by_category[category_name][:completed] += 1
+      end
+      
+      if include_bugs && bug_issues
+        created_bug_issues = bug_issues.select { |issue| issue.created_on.present? && issue.created_on >= today - day.days && issue.created_on <= today - (day - 1).days }
+        completed_bug_issues = bug_issues.select { |issue| issue.end_time.present? && issue.end_time >= today - day.days && issue.end_time <= today - (day - 1).days }
+        
+        issues_by_category['BUG'] ||= { all: 0, created: 0, completed: 0 }
+        issues_by_category['BUG'][:created] += created_bug_issues.size
+        issues_by_category['BUG'][:completed] += completed_bug_issues.size
+        # 전체 버그 개수 계산
+        if all_bug_issues
+          issues_by_category['BUG'][:all] = all_bug_issues.size
+        end
+      end
+      
+      # 전체 일감 개수 계산 (all_issues가 있으면 사용, 없으면 기존 방식)
+      total_all_issues = all_issues ? all_issues.size : issues.size
+      
+      issues_by_days.push({
+        day: Date.today - day.days,
+        all: total_all_issues,
+        created: created_issues.size,
+        completed: completed_issues.size,
+        issues_by_category: issues_by_category
+      })
+    end
+    
+    issues_by_days
+  end
+
+  # 잔여 일감 개수 계산
+  def calculate_rest_issue_counts(all_issues, all_completed_issues, all_bug_issues, all_bug_completed_issues, categories, include_bugs: true)
+    rest_issue_count_per_category = {}
+    
+    categories.each do |id, category|
+      rest_issue_count_per_category[category] = all_issues.where(category_id: id).size - all_completed_issues.where(category_id: id).size
+    end
+    
+    if include_bugs
+      rest_issue_count_per_category['BUG'] = all_bug_issues.size - all_bug_completed_issues.size
+    end
+    
+    rest_issue_count_per_category
+  end
+
+  # 평균 소요 시간 계산
+  def calculate_average_hours(issues, bug_issues, categories, bug_ids, include_bugs: true)
+    avarage_hours_per_category = {}
+    avarage_count_per_category = {}
+    
+    if include_bugs
+      avarage_hours_per_category['BUG'] = 0
+      avarage_count_per_category['BUG'] = 0
+    end
+    
+    # issues와 bug_issues가 ActiveRecord::Relation인지 Array인지 확인하고 처리
+    timed_issues = []
+    
+    # 일반 일감 처리
+    if issues.respond_to?(:where)
+      timed_issues += issues.where.not(begin_time: nil, end_time: nil).to_a
+    else
+      timed_issues += issues.select { |issue| issue.begin_time.present? && issue.end_time.present? }
+    end
+    
+    # 버그 일감 처리
+    if include_bugs && bug_issues
+      if bug_issues.respond_to?(:where)
+        timed_issues += bug_issues.where.not(begin_time: nil, end_time: nil).to_a
+      else
+        timed_issues += bug_issues.select { |issue| issue.begin_time.present? && issue.end_time.present? }
+      end
+    end
+    
+    timed_issues.each do |issue|
+      # nil 체크 추가
+      next unless issue.begin_time.present? && issue.end_time.present?
+      next if issue.end_time - issue.begin_time >= 1.year
+      
+      if bug_ids.include?(issue.tracker_id)
+        category_name = 'BUG'
+      else
+        next unless issue.category_id
+        category_name = categories[issue.category_id]
+        next unless category_name
+      end
+      
+      avarage_hours_per_category[category_name] ||= 0
+      avarage_hours_per_category[category_name] += (issue.end_time - issue.begin_time).to_i
+      avarage_count_per_category[category_name] ||= 0
+      avarage_count_per_category[category_name] += 1
+    end
+    
+    avarage_hours_per_category.map do |category_name, hours|
+      count = avarage_count_per_category[category_name]
+      [category_name, count > 0 ? (hours / count) / 3600 : 0]
+    end.to_h
+  end
+
+  # 웰컴 페이지용 기본 통계 처리
+  def process_welcome_data(today, version_id)
+    base_data = get_base_data
+    issue_data = get_issues_data(base_data, version_id)
+    bug_data = get_bug_data(base_data, version_id)
+    
+    [ {
+      total_issues: issue_data[:all_issues].size,
+      completed_issues: issue_data[:all_completed_issues].size,
+      total_bugs: bug_data[:all_bug_issues].size,
+      completed_bugs: bug_data[:all_bug_completed_issues].size,
+      completion_rate: issue_data[:all_issues].size > 0 ? (issue_data[:all_completed_issues].size.to_f / issue_data[:all_issues].size * 100).round(2) : 0,
+      bug_completion_rate: bug_data[:all_bug_issues].size > 0 ? (bug_data[:all_bug_completed_issues].size.to_f / bug_data[:all_bug_issues].size * 100).round(2) : 0      
+    }, Time.current ]
+  end
+
+  # 일감 통계용 데이터 처리
+  def process_issues_data(today, version_id)
+    base_data = get_base_data
+    issue_data = get_issues_data(base_data, version_id)
+    bug_data = get_bug_data(base_data, version_id)
+    
+    issues_by_days = calculate_daily_stats(today, issue_data[:issues], bug_data[:bug_issues], base_data[:categories], issue_data[:all_issues], bug_data[:all_bug_issues])
+    avarage_hours_per_category = calculate_average_hours(issue_data[:issues], bug_data[:bug_issues], base_data[:categories], base_data[:bug_ids])
+    rest_issue_count_per_category = calculate_rest_issue_counts(
+      issue_data[:all_issues], 
+      issue_data[:all_completed_issues], 
+      bug_data[:all_bug_issues], 
+      bug_data[:all_bug_completed_issues], 
+      base_data[:categories]
+    )
+    
+    [issues_by_days, avarage_hours_per_category, rest_issue_count_per_category, Time.current]
+  end
+
+  # 버그 통계용 데이터 처리
+  def process_bugs_data(today, version_id)
+    base_data = get_base_data
+    bug_data = get_bug_data(base_data, version_id)
+    
+    # 버그 통계용 데이터 (일반 일감 제외)
+    issues_by_days = calculate_daily_stats(today, [], bug_data[:bug_issues], base_data[:categories], nil, bug_data[:all_bug_issues], include_bugs: true)
+    rest_issue_count_per_category = calculate_rest_issue_counts(
+      Issue.none, 
+      Issue.none, 
+      bug_data[:all_bug_issues], 
+      bug_data[:all_bug_completed_issues], 
+      base_data[:categories], 
+      include_bugs: true
+    )
+    
+    # 담당자별 미해결 버그 집계
+    rest_bug_issues = bug_data[:all_bug_issues].select { |issue| issue.end_time.nil? }
+    rest_bug_issues = rest_bug_issues.group_by { |issue| issue.assigned_to_id }
+    user_map = User.where(id: rest_bug_issues.keys).index_by(&:id)
+    rest_bug_issues.transform_keys! { |key| user_map[key] }
+    rest_bug_issues.transform_values! do |issues|
+      issues.group_by { |issue| issue.fixed_version_id }.transform_values! { |issues| issues.size }
+    end
+
+    all_bug_issues = bug_data[:all_bug_issues]
+
+    # 카테고리별 미해결 버그 수 (상위 10 표시용) - 카테고리 없으면 '미분류'
+    rest_bug_count_per_category = begin
+      counts = Hash.new(0)
+      # 루프 바깥에서 필요한 카테고리 이름을 모두 로드
+      bug_category_ids = bug_data[:all_bug_issues].map(&:category_id).compact.uniq
+      external_categories = bug_category_ids.any? ? IssueCategory.where(id: bug_category_ids).pluck(:id, :name).to_h : {}
+      categories_map = base_data[:categories].merge(external_categories)
+
+      bug_data[:all_bug_issues].each do |issue|
+        next if issue.end_time.present?
+        category_name = categories_map[issue.category_id] || '미분류'
+        counts[category_name] += 1
+      end
+      counts
+    end
+    
+    [issues_by_days, rest_issue_count_per_category, rest_bug_issues, rest_bug_count_per_category, all_bug_issues, Time.current]
+  end
 
     def get_all_descendants(issue)
       descendants = []

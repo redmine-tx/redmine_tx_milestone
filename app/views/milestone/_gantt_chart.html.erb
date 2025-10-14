@@ -172,7 +172,11 @@
                 <% elsif !IssueStatus.is_completed?(issue.status_id) && issue.due_date && issue.due_date < Date.today then %>
                     🔥
                 <% end %>
-                <span class="issue-subject-link" style="<%= subject_style %>"><%= link_to "##{issue.id}", "/projects/#{ @project ? @project.identifier : issue.project.identifier }/milestone/gantt/issues/#{issue.id}" %> <%= link_to "#{issue.subject}".html_safe, gantt_opts[:issue_link_url] ? gantt_opts[:issue_link_url] + issue.id.to_s : issue_path(issue) %></span>
+                <span class="issue-subject-link" style="<%= subject_style %>" data-issue-tooltip="<%= issue.id %>">
+                    <%= link_to "##{issue.id}", "/projects/#{ @project ? @project.identifier : issue.project.identifier }/milestone/gantt/issues/#{issue.id}" %> 
+                    <%= link_to issue.subject.html_safe, gantt_opts[:issue_link_url] ? gantt_opts[:issue_link_url] + issue.id.to_s : issue_path(issue), 
+                                class: issue.css_classes, title: issue.subject.truncate(100) %>
+                </span>
 
                 </div>
                 <% if gantt_opts[:hide_assignee] != true %>
@@ -316,9 +320,10 @@
           
           <% (start_date..end_date).each do |date| %>
             <% has_tooltip = tooltip_begin_date && tooltip_end_date && ( ( date >= tooltip_begin_date && date <= tooltip_end_date) || date == line_start_date || date == line_end_date ) %>
-            <div class="task-cell<%= show_no_due_date_warning ? ' n' : '' %> <%= has_tooltip ? 'hascontextmenu' : '' %>" style="height: <%=cell_height%>px; position: relative;" id="issue-<%= issue.id %>">
+            <% has_bar_here = (date == issue_begin_date) || ( issue_begin_date && date == start_date && issue_begin_date < start_date && issue_end_date >= start_date ) %>
+            <div class="task-cell<%= show_no_due_date_warning ? ' n' : '' %>" style="height: <%=cell_height%>px; position: relative;" id="issue-<%= issue.id %>">
               <!-- 작업완료 or 작업중 이슈 -->
-              <% if date == issue_begin_date || ( issue_begin_date && date == start_date && issue_begin_date < start_date && issue_end_date >= start_date ) then%>
+              <% if has_bar_here then%>
                 <%
                   #debug[:date] = date.strftime( '%Y-%m-%d' )
 
@@ -339,11 +344,12 @@
                               end
                 %>
                 <% if !Tracker.is_exception?( issue.tracker_id ) then %>
-                  <div class="task-bar<%= IssueStatus.is_implemented?( issue.status_id ) ? ' completed' : '' %><%= IssueStatus.is_in_review?( issue.status_id ) ? ' confirm' : '' %>" style="width: <%= bar_width %>px; height: <%=cell_height-4%>px; position: absolute; left: 0; z-index: 1;">
+                  <div class="task-bar<%= IssueStatus.is_implemented?( issue.status_id ) ? ' completed' : '' %><%= IssueStatus.is_in_review?( issue.status_id ) ? ' confirm' : '' %>" style="width: <%= bar_width %>px; height: <%=cell_height-4%>px; position: absolute; left: 0; z-index: 1;" data-issue-tooltip="<%= issue.id %>">
                     <% if IssueStatus.is_in_progress?( issue.status_id ) %>
                       <div class="task-bar-progress<%= IssueStatus.is_in_review?( issue.status_id ) ? ' confirm' : '' %>" style="width: <%= issue.done_ratio %>%;"></div>
                     <% end %>
                   </div>
+                  <div class="task-tooltip-hit" data-issue-tooltip="<%= issue.id %>" style="position: absolute; left: 0; top: 0; width: <%= (show_line && date == line_start_date && line_width > bar_width) ? line_width : bar_width %>px; height: <%= cell_height %>px; z-index: 50;"></div>
                 <% end %>
               <% end %>
 
@@ -357,7 +363,10 @@
 
               <!-- 예정 이슈 -->
               <% if show_line && date == line_start_date %>
-                <div class="arrow-line<%= show_line_before ? ' show-before' : '' %> <%= show_line_after ? ' show-after' : '' %>" style="width: <%=line_width %>px; top: <%= cell_height -3 %>px;<% if defined?(virtual_ids) && virtual_ids.include?(issue.id) %> background-color: #fa0;<% end %>"></div>
+                <div class="arrow-line<%= show_line_before ? ' show-before' : '' %> <%= show_line_after ? ' show-after' : '' %>" style="width: <%=line_width %>px; top: <%= cell_height -3 %>px;<% if defined?(virtual_ids) && virtual_ids.include?(issue.id) %> background-color: #fa0;<% end %>" data-issue-tooltip="<%= issue.id %>"></div>
+                <% unless has_bar_here %>
+                  <div class="task-tooltip-hit" data-issue-tooltip="<%= issue.id %>" style="position: absolute; left: 0; top: 0; width: <%= line_width %>px; height: <%= cell_height %>px; z-index: 50;"></div>
+                <% end %>
               <% end %>
 
             </div>
