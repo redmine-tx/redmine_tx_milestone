@@ -47,7 +47,7 @@
         timelineRow.find('.project-bar').each(function(barIndex) {
           var scheduleBar = $(this);
           var title = scheduleBar.attr('title') || '';
-          var scheduleName = scheduleBar.find('.project-bar-text').text().trim();
+          var scheduleName = scheduleBar.attr('data-schedule-name') || scheduleBar.find('.project-bar-text').text().trim();
           
           // title에서 날짜 추출 시도
           var dateMatch = title.match(/\((\d{4}-\d{2}-\d{2}) ~ (\d{4}-\d{2}-\d{2})\)/);
@@ -335,7 +335,7 @@
            var timelineRow = $('.timeline-row[data-event-name="' + eventName + '"][data-category-name="' + categoryName + '"]');
            timelineRow.find('.project-bar').each(function(barIndex) {
              var scheduleBar = $(this);
-             var scheduleName = scheduleBar.find('.project-bar-text').text().trim();
+             var scheduleName = scheduleBar.attr('data-schedule-name') || scheduleBar.find('.project-bar-text').text().trim();
              var title = scheduleBar.attr('title') || '';
              
              // 이슈 번호 추출
@@ -525,7 +525,7 @@
            timelineRow.find('.project-bar').each(function() {
              var scheduleBar = $(this);
              var title = scheduleBar.attr('title') || '';
-             var scheduleName = scheduleBar.find('.project-bar-text').text().trim();
+             var scheduleName = scheduleBar.attr('data-schedule-name') || scheduleBar.find('.project-bar-text').text().trim();
              
              var dateMatch = title.match(/\((\d{4}-\d{2}-\d{2}) ~ (\d{4}-\d{2}-\d{2})\)/);
              var startDate = '';
@@ -1452,7 +1452,7 @@
            scheduleBars.forEach(function(bar, barIndex) {
              var $bar = $(bar);
              var title = $bar.attr('title') || '';
-             var scheduleName = $bar.find('.project-bar-text').text().trim();
+             var scheduleName = $bar.attr('data-schedule-name') || $bar.find('.project-bar-text').text().trim();
              
              // 날짜 추출 (정규식 캐싱)
              var dateMatch = title.match(/\((\d{4}-\d{2}-\d{2}) ~ (\d{4}-\d{2}-\d{2})\)/);

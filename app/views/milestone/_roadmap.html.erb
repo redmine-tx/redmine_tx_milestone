@@ -507,9 +507,12 @@ $(document).ready(function() {
     console.log('초기 페이지 구성 완료');
   }
   
-  // 기존 스케쥴바들에 이슈 링크 아이콘 추가
+  // 기존 스케쥴바들에 이슈 링크 아이콘 추가 및 스케줄 원문 속성 보정
   setTimeout(function() {
     addIssueLinkIconsToExistingBars();
+    if (typeof initializeScheduleNameAttributes === 'function') {
+      initializeScheduleNameAttributes();
+    }
   }, 200);
   
   // body에 클래스 추가로 전체 페이지 스크롤 제어
@@ -1318,6 +1321,8 @@ $(document).ready(function() {
       
       // 새로 추가된 바에 드래그/리사이즈 기능 적용
       var newBar = timelineRow.find('.project-bar').last();
+      // 원문 스케줄명을 데이터 속성으로 보존
+      newBar.attr('data-schedule-name', scheduleData.name);
       applyDraggableToElements(newBar);
       
       console.log('새 스케줄 바 추가됨');
@@ -1429,7 +1434,7 @@ $(document).ready(function() {
     var timelineRow = scheduleBar.closest('.timeline-row');
     var eventName = timelineRow.data('event-name');
     var categoryName = timelineRow.data('category-name');
-    var scheduleName = scheduleBar.find('.project-bar-text').text().trim();
+    var scheduleName = scheduleBar.attr('data-schedule-name') || scheduleBar.find('.project-bar-text').text().trim();
     
     console.log('스케줄 바 우클릭:', {
       event: eventName,

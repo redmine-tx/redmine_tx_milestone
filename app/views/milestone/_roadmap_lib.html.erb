@@ -266,6 +266,8 @@ function parseLocalDate(dateString) {
                 '</div>';
               
               timelineRow.append(scheduleBarHtml);
+              // 원문 스케줄명을 데이터 속성으로 보존
+              timelineRow.find('.project-bar').last().attr('data-schedule-name', scheduleData.name);
             }
           }
         });
@@ -312,6 +314,30 @@ function parseLocalDate(dateString) {
       // 공통 함수를 사용하여 이슈 링크 아이콘 추가
       var issueLinkIcon = generateIssueLinkIcon(issueNumber);
       $bar.append(issueLinkIcon);
+    });
+  }
+
+  // 기존 스케줄 바들에 원문 스케줄명 속성 보정 함수
+  function initializeScheduleNameAttributes() {
+    $('.project-bar').each(function() {
+      var $bar = $(this);
+      // 이미 원문 속성이 있으면 유지
+      var originalName = $bar.attr('data-schedule-name');
+      if (originalName && originalName.trim() !== '') {
+        return;
+      }
+      // title에서 이름 부분만 추출 시도: "이름 (YYYY-MM-DD ~ YYYY-MM-DD)"
+      var title = $bar.attr('title') || '';
+      var match = title.match(/^(.*) \(\d{4}-\d{2}-\d{2} ~ \d{4}-\d{2}-\d{2}\)$/);
+      if (match && match[1]) {
+        $bar.attr('data-schedule-name', match[1]);
+        return;
+      }
+      // fallback: 표시 텍스트 사용 (…일 수 있음)
+      var displayText = $bar.find('.project-bar-text').text().trim();
+      if (displayText) {
+        $bar.attr('data-schedule-name', displayText);
+      }
     });
   }
 
@@ -1134,6 +1160,8 @@ function parseLocalDate(dateString) {
     scheduleBar.attr('title', scheduleData.name + ' (' + 
       formatLocalDate(startDate) + ' ~ ' + 
       formatLocalDate(endDate) + ')');
+    // 원문 스케줄명 속성 갱신
+    scheduleBar.attr('data-schedule-name', scheduleData.name);
     
     // 이슈 번호를 data 속성으로 저장
     scheduleBar.attr('data-issue-number', scheduleData.issue);
