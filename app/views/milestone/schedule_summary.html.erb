@@ -1,0 +1,813 @@
+<%= render 'milestone/header' %>
+
+<% content_for :header_tags do %>
+  <!-- ExcelJS 라이브러리 -->
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/exceljs/4.3.0/exceljs.min.js"></script>
+  
+  <!-- TX XLSX Exporter (공용 엑셀 익스포터) -->
+  <%= javascript_include_tag 'tx_xlsx_exporter', plugin: 'redmine_tx_0_base' %>
+  
+  <!-- TX Timeline Grid (웹 타임라인 렌더러) -->
+  <%= javascript_include_tag 'tx_timeline_grid', plugin: 'redmine_tx_0_base' %>
+  <%= stylesheet_link_tag 'tx_timeline_grid', plugin: 'redmine_tx_0_base' %>
+  
+  <style>
+    .schedule-summary-form {
+      background: #f9f9f9;
+      padding: 15px;
+      border: 1px solid #ddd;
+      border-radius: 4px;
+      margin-bottom: 20px;
+    }
+    .schedule-summary-form label {
+      display: block;
+      font-weight: bold;
+      margin-bottom: 5px;
+    }
+    .schedule-summary-form .form-group {
+      margin-bottom: 15px;
+    }
+    .schedule-summary-form textarea {
+      width: 100%;
+      max-width: 600px;
+      height: 60px;
+      font-family: monospace;
+    }
+    .schedule-summary-form select[multiple] {
+      width: 100%;
+      max-width: 300px;
+      height: 150px;
+    }
+    .schedule-summary-form .hint {
+      color: #888;
+      font-size: 0.9em;
+      margin-top: 3px;
+    }
+    .schedule-summary-result {
+      margin-top: 20px;
+    }
+    .schedule-summary-result h3 {
+      background: #628db6;
+      color: white;
+      padding: 8px 12px;
+      margin: 15px 0 10px 0;
+      border-radius: 3px;
+    }
+    .schedule-summary-result .user-schedule {
+      margin-left: 15px;
+      padding: 5px 0;
+      border-bottom: 1px dotted #ddd;
+    }
+    .schedule-summary-result .user-schedule:last-child {
+      border-bottom: none;
+    }
+    .schedule-summary-result .user-name {
+      font-weight: bold;
+      color: #333;
+      min-width: 80px;
+      display: inline-block;
+    }
+    .schedule-summary-result .issue-link {
+      margin-right: 8px;
+    }
+    .schedule-summary-result .issue-dates {
+      color: #666;
+      font-size: 0.9em;
+    }
+    .no-result {
+      color: #888;
+      font-style: italic;
+      padding: 20px;
+      text-align: center;
+    }
+    .color-legend {
+      background: #f9f9f9;
+      border: 1px solid #ddd;
+      border-radius: 4px;
+      padding: 10px 15px;
+      margin: 15px 0;
+    }
+    .color-legend h4 {
+      margin: 0 0 10px 0;
+      font-size: 0.95em;
+      color: #555;
+    }
+    .legend-item {
+      display: inline-block;
+      margin: 5px 10px 5px 0;
+      padding: 4px 10px;
+      border-radius: 3px;
+      font-size: 0.9em;
+      color: white;
+      font-weight: bold;
+    }
+    .legend-item a {
+      color: white;
+      text-decoration: none;
+    }
+    .legend-item a:hover {
+      text-decoration: underline;
+    }
+    .issue-color-indicator {
+      display: inline-block;
+      width: 12px;
+      height: 12px;
+      border-radius: 2px;
+      margin-right: 3px;
+      vertical-align: middle;
+      border: 1px solid rgba(0,0,0,0.2);
+    }
+    /* XLSX 버튼 커서 포인터 */
+    #export-xlsx-btn {
+      cursor: pointer;
+    }
+  </style>
+<% end %>
+
+<% html_title("일정요약") %>
+
+<%
+# 팀(그룹) 목록 로드
+excluded_group_ids = TxBaseHelper.config_arr('e_group') || []
+all_groups = Group.all.reject { |group| excluded_group_ids.include?(group.id) }
+%>
+
+<% if params[:issue_ids].present? %>
+  <%
+  # 표기 시작일 파싱
+  default_display_start_date = 6.months.ago.to_date
+  display_start_date = params[:display_start_date].present? ? Date.parse(params[:display_start_date]) : default_display_start_date
+  
+  # 일감 ID 파싱 (쉼표, 세미콜론, 공백으로 분리)
+  input_issue_ids = params[:issue_ids].to_s.split(/[,;\s]+/).map(&:strip).reject(&:empty?).map(&:to_i).uniq
+  
+  # 입력된 일감들과 연관된 일감들 조회
+  input_issues = Issue.where(id: input_issue_ids)
+  parent_issues = input_issues.map(&:root).uniq
+
+  # 버전별 마커 수집
+  versions = parent_issues.map(&:fixed_version).uniq.select { |v| v.effective_date.present? }.sort_by(&:effective_date)
+  version_markers = []
+  versions.each do |version|
+    version.marks.each do |mark|
+      version_markers << { date: mark[:date], name: mark[:name], color: '#9999ff', side: 'right' }
+    end
+    version_markers << { date: version.effective_date, name: version.name, color: '#5555cc', side: 'right' }
+  end
+  
+  # 메인 일감별 색상 팔레트 정의
+  color_palette = [
+    '#98E5B0', '#FFD280', '#C897CE', '#8FC5F0', '#FFB0B0', 
+    '#70D8BE', '#F09897', '#8FBFEA', '#F9CC85', '#78D9A8',
+    '#F9C980', '#B880C3', '#6BC2B0', '#E08080', '#70D095'
+  ]
+  
+  # 메인 일감(입력된 일감)마다 색상 할당
+  main_issue_colors = {}
+  parent_issues.each_with_index do |issue, idx|
+    main_issue_colors[issue.id] = color_palette[idx % color_palette.length]
+  end
+  
+  # 각 일감이 어떤 메인 일감에 속하는지 매핑 (일감 ID -> 메인 일감 ID)
+  issue_to_main_issue = {}
+  parent_issues.each do |main_issue|
+    # 메인 일감 자신
+    issue_to_main_issue[main_issue.id] = main_issue.id
+    # 하위 일감들
+    main_issue.descendants.each do |descendant|
+      issue_to_main_issue[descendant.id] = main_issue.id
+    end
+  end
+  
+  # 모든 하위 일감 포함 (descendants)
+  all_issue_ids = Set.new(input_issue_ids)
+  parent_issues.each do |issue|
+    all_issue_ids.merge(issue.descendants.pluck(:id))
+  end
+  
+  # 전체 일감 조회
+  all_issues = Issue.where(id: all_issue_ids.to_a)
+  
+  # 시작일과 완료일이 모두 있는 일감만 필터링
+  filtered_issues = all_issues.where.not(start_date: nil)
+                              .where.not(due_date: nil)
+
+  # 표기 시작일 이전에 시작하고 종료되는 일감 제외
+  # startDate와 endDate가 모두 표기 시작일보다 빠른 경우 제외
+  filtered_issues = filtered_issues.where(
+    "start_date >= ? OR due_date >= ?", 
+    display_start_date, 
+    display_start_date
+  )
+
+  # 폐기된 일감 제거
+  filtered_issues = filtered_issues.where.not(status_id: IssueStatus.discarded_ids)
+
+  # 실제 구현 일감만 취합
+  excluded_tracker_ids = ( Tracker.bug_trackers_ids + 
+                         Tracker.sidejob_trackers_ids + 
+                         Tracker.exception_trackers_ids + 
+                         Tracker.roadmap_trackers_ids ).uniq
+
+  filtered_issues = filtered_issues.where.not(tracker_id: excluded_tracker_ids)
+  
+  # 전체 일감에도 동일한 tracker 필터 적용 (배제된 일감 계산에 사용)
+  filtered_all_issues = all_issues.where.not(tracker_id: excluded_tracker_ids)
+                                  .where.not(status_id: IssueStatus.discarded_ids)
+  
+  # 선택된 그룹 필터
+  selected_group_ids = params[:group_ids]&.map(&:to_i)&.reject { |id| id == 0 } || []
+  
+  # 그룹 정보 로드
+  if selected_group_ids.any?
+    groups_to_show = Group.where(id: selected_group_ids)
+  else
+    groups_to_show = all_groups
+  end
+  
+  # 사용자별 일감 그룹핑 (담당자가 있고 일정이 있는 것만)
+  issues_by_user = filtered_issues.where.not(assigned_to_id: nil).group_by(&:assigned_to_id)
+  
+  # 사용자 정보 미리 로드
+  user_ids = issues_by_user.keys.compact
+  users = User.where(id: user_ids).index_by(&:id)
+  
+  # 그룹별 사용자 매핑
+  group_user_mapping = {}
+  groups_to_show.each do |group|
+    group_user_mapping[group] = group.users.pluck(:id)
+  end
+  
+  # 결과 데이터 구성: 그룹 -> 사용자 -> 일감들
+  result_data = {}
+  groups_to_show.each do |group|
+    group_users_issues = {}
+    group_user_ids = group_user_mapping[group]
+    
+    group_user_ids.each do |user_id|
+      next unless issues_by_user[user_id]
+      user = users[user_id]
+      next unless user
+      
+      user_issues = issues_by_user[user_id].sort_by(&:start_date)
+      group_users_issues[user] = user_issues if user_issues.any?
+    end
+    
+    result_data[group] = group_users_issues if group_users_issues.any?
+  end
+  
+  # 각 사용자별 다른 미완료 일감 조회 (배경 표시용)
+  # 현재 표시된 일감 ID 집합
+  displayed_issue_ids = filtered_issues.where.not(assigned_to_id: nil).pluck(:id).to_set
+  
+  # 미완료 상태 ID 조회 (is_closed가 false인 상태)
+  open_status_ids = IssueStatus.where(is_closed: false).pluck(:id)
+  
+  # 사용자별 다른 미완료 일감 (배경 일정)
+  background_issues_by_user = {}
+  user_ids.each do |user_id|
+    # 해당 사용자의 미완료 일감 중 표시 범위 내에 있는 것
+    other_issues = Issue.where(assigned_to_id: user_id)
+                        #.where(status_id: open_status_ids)
+                        .where.not(id: displayed_issue_ids.to_a)
+                        .where.not(start_date: nil)
+                        .where.not(due_date: nil)
+                        .where.not(tracker_id: excluded_tracker_ids)
+                        .where("start_date >= ? OR due_date >= ?", display_start_date, display_start_date)
+    
+    background_issues_by_user[user_id] = other_issues.to_a if other_issues.any?
+  end
+  
+  # 배제된 일감들 분류
+  # 1. 미배정 일감 (담당자 없음)
+  unassigned_issues = filtered_all_issues.where(assigned_to_id: nil)
+  
+  # 2. 일정 미기입 일감 (담당자는 있지만 시작일 또는 완료일 없음)
+  missing_schedule_issues = filtered_all_issues.where.not(assigned_to_id: nil)
+                                               .where('start_date IS NULL OR due_date IS NULL')
+  %>
+  
+  <div class="schedule-summary-result">
+    <h2>요약 결과</h2>
+    
+    <%# '메인 일감별 색상'은 타임라인 그리드의 범례(jsonData.legends)와 중복되므로 표기하지 않음 %>
+    
+    <p>
+      입력된 일감: <strong><%= input_issue_ids.size %>개</strong> | 
+      전체 일감 (하위 포함, 실제 구현 일감만): <strong><%= filtered_all_issues.size %>개</strong> | 
+      요약된 일감 (담당자/일정 있음): <strong><%= filtered_issues.where.not(assigned_to_id: nil).size %>개</strong>
+    </p>
+    
+    <% if result_data.any? %>
+      <!-- 타임라인 그리드 -->
+      <div id="timeline-grid-container" style="margin: 20px 0;"></div>
+    <% else %>
+      <div class="no-result">
+        선택한 조건에 맞는 일감이 없습니다.
+      </div>
+    <% end %>
+    
+    <% if unassigned_issues.any? || missing_schedule_issues.any? %>
+      <hr style="margin: 30px 0; border: none; border-top: 2px solid #ddd;">
+      <h3 style="color: #ddd;">📝 산정에서 배제된 일감</h3>
+      
+      <% if unassigned_issues.any? %>
+        <h4 style="margin: 15px 0 10px 0; color: #666;">미배정 일감 (<%= unassigned_issues.size %>개)</h4>
+        <%= render partial: 'shared/issue_list', locals: { 
+          issues: unassigned_issues, 
+          page_size: 15, 
+          columns: [:id, :tracker, :priority, :assigned_to, :subject, :status, :start_date, :due_date], 
+          list_id: 'unassigned-issues-list' 
+        } %>
+      <% end %>
+      
+      <% if missing_schedule_issues.any? %>
+        <h4 style="margin: 15px 0 10px 0; color: #666;">일정 미기입 일감 (<%= missing_schedule_issues.size %>개)</h4>
+        <%= render partial: 'shared/issue_list', locals: { 
+          issues: missing_schedule_issues, 
+          page_size: 15, 
+          columns: [:id, :tracker, :priority, :assigned_to, :subject, :status, :start_date, :due_date, :estimated_hours_plus, :tip], 
+          list_id: 'missing-schedule-issues-list' 
+        } %>
+      <% end %>
+    <% end %>
+
+    <%# 텍스트 요약 (접이식) - 결과 최하단으로 이동 %>
+    <% if result_data.any? %>
+      <details style="margin-top: 20px;">
+        <summary style="cursor: pointer; font-weight: bold; padding: 8px; background: #f5f5f5; border-radius: 4px;">📝 텍스트 요약 보기</summary>
+        <div style="padding: 10px 0;">
+          <% result_data.each do |group, users_issues| %>
+            <h3>* <%= group.name %></h3>
+            <% users_issues.each do |user, issues| %>
+              <div class="user-schedule">
+                <span class="user-name">- <%= link_to user.name, user_path(user) %> :</span>
+
+                <%# 기본 일감 표시 %>
+                <% issues.sort_by(&:start_date).each_with_index do |issue, idx| %>
+                  <%
+                    main_issue_id = issue_to_main_issue[issue.id]
+                    issue_color = main_issue_colors[main_issue_id] || '#999999'
+                  %>
+                  <span class="issue-link">
+                    <span class="issue-color-indicator" style="background-color: <%= issue_color %>;"></span><%= link_to "##{issue.id}", issue_path(issue), data: { issue_tooltip: issue.id } %><span class="issue-dates">(<%= issue.start_date.strftime('%Y-%m-%d') %>~<%= issue.due_date.strftime('%Y-%m-%d') %>)</span><%= ',' unless idx == issues.size - 1 %>
+                  </span>
+                <% end %>
+
+                <%# 미완료 일감 표시 (연한 회색) %>
+                <% if background_issues_by_user[user.id] %>
+                  <br>
+                  <span style="margin-left: 20px; color: #999;">
+                    (기타 일정:
+                    <% background_issues_by_user[user.id].sort_by(&:start_date).each_with_index do |bg_issue, idx| %>
+                      <span class="issue-link" style="opacity: 0.7;">
+                        <span class="issue-color-indicator" style="background-color: #e0e0e0;"></span><%= link_to "##{bg_issue.id}", issue_path(bg_issue), data: { issue_tooltip: bg_issue.id }, style: "color: #999;" %><span class="issue-dates">(<%= bg_issue.start_date.strftime('%Y-%m-%d') %>~<%= bg_issue.due_date.strftime('%Y-%m-%d') %>)</span><%= ',' unless idx == background_issues_by_user[user.id].size - 1 %>
+                      </span>
+                    <% end %>
+                    )
+                  </span>
+                <% end %>
+              </div>
+            <% end %>
+          <% end %>
+        </div>
+      </details>
+    <% end %>
+  </div>
+<% end %>
+
+<% if params[:issue_ids].present? && result_data.any? %>
+<script>
+$(document).ready(function() {
+  /**
+   * 스케줄 오버랩 처리 함수
+   * 규칙:
+   * 1. 메인 일감(isMuted=false)이 배경 일감(isMuted=true)보다 우선
+   * 2. 완전 포함: 더 긴(또는 우선순위 높은) 일정만 표시
+   * 3. 부분 중첩: 우선하는 일정을 온전히 표기, 겹치는 일정은 이전 일정 종료 다음날부터 시작하도록 조정
+   */
+  function resolveScheduleOverlaps(schedules) {
+    if (!schedules || schedules.length <= 1) return schedules;
+    
+    // 날짜 문자열을 Date 객체로 변환하는 헬퍼
+    function parseDate(dateStr) {
+      return new Date(dateStr + 'T00:00:00');
+    }
+    
+    // Date를 날짜 문자열로 변환하는 헬퍼
+    function formatDate(date) {
+      var year = date.getFullYear();
+      var month = String(date.getMonth() + 1).padStart(2, '0');
+      var day = String(date.getDate()).padStart(2, '0');
+      return year + '-' + month + '-' + day;
+    }
+    
+    // 일정 기간(일수) 계산
+    function getDuration(schedule) {
+      var start = parseDate(schedule.startDate);
+      var end = parseDate(schedule.endDate);
+      return Math.floor((end - start) / (1000 * 60 * 60 * 24)) + 1;
+    }
+    
+    // 정렬: 1. isMuted=false 우선, 2. 시작일 빠른 순, 3. 기간 긴 순
+    var sorted = schedules.slice().sort(function(a, b) {
+      // isMuted가 false인 것(메인 일감)이 우선
+      if (a.isMuted !== b.isMuted) {
+        return a.isMuted ? 1 : -1;
+      }
+      // 시작일 비교
+      var startA = parseDate(a.startDate);
+      var startB = parseDate(b.startDate);
+      if (startA.getTime() !== startB.getTime()) {
+        return startA - startB;
+      }
+      // 기간이 긴 것 우선
+      return getDuration(b) - getDuration(a);
+    });
+    
+    var result = [];
+    var mainOccupiedRanges = []; // 기본 일감(isMuted=false)만의 점유 범위
+    var allOccupiedRanges = [];  // 전체 일감의 점유 범위 (기본 + 미완료)
+    
+    // 스케줄 복사 헬퍼
+    function cloneSchedule(schedule) {
+      var copy = {};
+      for (var key in schedule) {
+        if (schedule.hasOwnProperty(key)) {
+          copy[key] = schedule[key];
+        }
+      }
+      return copy;
+    }
+    
+    sorted.forEach(function(schedule) {
+      var schedStart = parseDate(schedule.startDate);
+      var schedEnd = parseDate(schedule.endDate);
+      var isMuted = schedule.isMuted;
+      
+      // 참조할 점유 범위 선택:
+      // - 기본 일감(isMuted=false): 기본 일감 점유 범위만 참조
+      // - 미완료 일감(isMuted=true): 전체 점유 범위 참조
+      var referenceRanges = isMuted ? allOccupiedRanges : mainOccupiedRanges;
+      
+      // 점유 범위를 시작일 순으로 정렬
+      var sortedOccupied = referenceRanges.slice().sort(function(a, b) {
+        return a.start - b.start;
+      });
+      
+      if (isMuted) {
+        // ========================================
+        // 미완료 일감: 분할 로직
+        // 기본 일감에 의해 중간이 잘리면 앞/뒤로 분할
+        // ========================================
+        var periodsToProcess = [{
+          start: new Date(schedStart),
+          end: new Date(schedEnd)
+        }];
+        
+        // 각 점유 범위에 대해 기간 분할
+        sortedOccupied.forEach(function(occupied) {
+          var newPeriods = [];
+          
+          periodsToProcess.forEach(function(period) {
+            // 겹치는지 확인
+            if (period.start <= occupied.end && period.end >= occupied.start) {
+              // 겹침 발생 - 분할 필요
+              
+              // 점유 범위 "전" 부분 (period.start ~ occupied.start - 1일)
+              if (period.start < occupied.start) {
+                var beforeEnd = new Date(occupied.start);
+                beforeEnd.setDate(beforeEnd.getDate() - 1);
+                if (beforeEnd >= period.start) {
+                  newPeriods.push({ 
+                    start: new Date(period.start), 
+                    end: beforeEnd 
+                  });
+                }
+              }
+              
+              // 점유 범위 "후" 부분 (occupied.end + 1일 ~ period.end)
+              if (period.end > occupied.end) {
+                var afterStart = new Date(occupied.end);
+                afterStart.setDate(afterStart.getDate() + 1);
+                if (afterStart <= period.end) {
+                  newPeriods.push({ 
+                    start: afterStart, 
+                    end: new Date(period.end) 
+                  });
+                }
+              }
+            } else {
+              // 겹치지 않음 - 그대로 유지
+              newPeriods.push(period);
+            }
+          });
+          
+          periodsToProcess = newPeriods;
+        });
+        
+        // 분할된 기간들을 결과에 추가
+        periodsToProcess.forEach(function(period) {
+          var adjustedSchedule = cloneSchedule(schedule);
+          adjustedSchedule.startDate = formatDate(period.start);
+          adjustedSchedule.endDate = formatDate(period.end);
+          
+          // 원본과 다르면 표시
+          if (formatDate(schedStart) !== adjustedSchedule.startDate || 
+              formatDate(schedEnd) !== adjustedSchedule.endDate) {
+            adjustedSchedule.originalStartDate = formatDate(schedStart);
+            adjustedSchedule.originalEndDate = formatDate(schedEnd);
+          }
+          
+          result.push(adjustedSchedule);
+          
+          // 점유 범위에 추가 (미완료 일감은 allOccupiedRanges에만)
+          allOccupiedRanges.push({ 
+            start: new Date(period.start), 
+            end: new Date(period.end) 
+          });
+        });
+        
+      } else {
+        // ========================================
+        // 기본 일감: 기존 로직 (시작일 조정)
+        // ========================================
+        var adjustedStart = new Date(schedStart);
+        var adjustedEnd = new Date(schedEnd);
+        
+        for (var i = 0; i < sortedOccupied.length; i++) {
+          var occupied = sortedOccupied[i];
+          
+          // 겹침 확인
+          if (adjustedStart <= occupied.end && adjustedEnd >= occupied.start) {
+            var nextDay = new Date(occupied.end);
+            nextDay.setDate(nextDay.getDate() + 1);
+            
+            if (nextDay > adjustedStart) {
+              adjustedStart = nextDay;
+            }
+          }
+          
+          if (adjustedStart > adjustedEnd) {
+            break;
+          }
+        }
+        
+        // 유효한 기간이 없으면 스킵
+        if (adjustedStart > adjustedEnd) {
+          return;
+        }
+        
+        var adjustedSchedule = cloneSchedule(schedule);
+        adjustedSchedule.startDate = formatDate(adjustedStart);
+        adjustedSchedule.endDate = formatDate(adjustedEnd);
+        
+        if (formatDate(schedStart) !== adjustedSchedule.startDate) {
+          adjustedSchedule.originalStartDate = formatDate(schedStart);
+        }
+        
+        result.push(adjustedSchedule);
+        
+        // 점유 범위에 추가 (기본 일감은 양쪽 모두)
+        var rangeEntry = { start: new Date(adjustedStart), end: new Date(adjustedEnd) };
+        allOccupiedRanges.push(rangeEntry);
+        mainOccupiedRanges.push({ start: new Date(adjustedStart), end: new Date(adjustedEnd) });
+      }
+    });
+    
+    // 결과를 시작일 순으로 다시 정렬
+    result.sort(function(a, b) {
+      return parseDate(a.startDate) - parseDate(b.startDate);
+    });
+    
+    return result;
+  }
+  
+  // JSON 데이터 구성 (타임라인 그리드 + 엑셀 공용)
+  var jsonData = {
+    options: {
+      categoryLabel: "팀",
+      eventLabel: "담당자",
+      rowHeight: 15,
+      showScheduleName: true,
+      startDate: "<%= display_start_date.strftime('%Y-%m-%d') %>"
+    },
+    categories: [],
+    legends: []
+  };
+  
+  <% result_data.each do |group, users_issues| %>
+    var category = {
+      name: "<%= j(group.name) %>",
+      customColor: null,
+      events: []
+    };
+    
+    <% users_issues.each do |user, issues| %>
+      var event = {
+        name: "<%= j(user.name) %>",
+        link: "<%= url_for(controller: 'users', action: 'show', id: user.id, only_path: false) %>",
+        schedules: []
+      };
+      
+      <%# 해당 사용자의 배경 일감 (다른 미완료 일감) 먼저 추가 %>
+      <% if background_issues_by_user[user.id] %>
+        <% background_issues_by_user[user.id].sort_by(&:start_date).each do |bg_issue| %>
+          <%
+            # 구현이 덜 끝난 상태 확인 (new, in_progress, in_review 상태 ID 기반)
+            bg_status_id = bg_issue.status_id
+            bg_in_progress_status_ids = IssueStatus.new_ids + IssueStatus.in_progress_ids + IssueStatus.in_review_ids
+            bg_is_in_progress = bg_in_progress_status_ids.include?(bg_status_id)
+            bg_font_color = bg_is_in_progress ? "#555555" : "#AAAAAA"
+          %>
+          event.schedules.push({
+            name: "<%= j("##{bg_issue.id} : #{bg_issue.subject}") %>",
+            startDate: "<%= bg_issue.start_date.strftime('%Y-%m-%d') %>",
+            endDate: "<%= bg_issue.due_date.strftime('%Y-%m-%d') %>",
+            issue: "#<%= bg_issue.id %>",
+            issueId: "<%= bg_issue.id %>",
+            doneRatio: "<%= bg_issue.done_ratio || 0 %>",
+            link: "<%= url_for(controller: 'issues', action: 'show', id: bg_issue.id, only_path: false) %>",
+            customColor: "#e0e0e0",
+            customFontColor: "<%= bg_font_color %>",
+            isMuted: true
+          });
+        <% end %>
+      <% end %>
+      
+      <%# 메인 일감들 추가 %>
+      <% issues.sort_by(&:start_date).each do |issue| %>
+        <%
+          main_issue_id = issue_to_main_issue[issue.id]
+          issue_color = main_issue_colors[main_issue_id] || '#999999'
+          
+          # 구현이 덜 끝난 상태 확인 (new, in_progress, in_review 상태 ID 기반)
+          status_id = issue.status_id
+          in_progress_status_ids = IssueStatus.new_ids + IssueStatus.in_progress_ids + IssueStatus.in_review_ids
+          is_in_progress = in_progress_status_ids.include?(status_id)
+          
+          # 구현 중인 일감은 기본 밝기, 구현 끝난 일감은 흐릿한 색상
+          font_color = is_in_progress ? "#555555" : "#AAAAAA"
+        %>
+        event.schedules.push({
+          name: "<%= j("##{issue.id} : #{issue.subject}") %>",
+          startDate: "<%= issue.start_date.strftime('%Y-%m-%d') %>",
+          endDate: "<%= issue.due_date.strftime('%Y-%m-%d') %>",
+          issue: "#<%= issue.id %>",
+          issueId: "<%= issue.id %>",
+          doneRatio: "<%= issue.done_ratio || 0 %>",
+          link: "<%= url_for(controller: 'issues', action: 'show', id: issue.id, only_path: false) %>",
+          customColor: "<%= issue_color %>"<% if font_color %>,
+          customFontColor: "<%= font_color %>"<% end %>
+        });
+      <% end %>
+      
+      category.events.push(event);
+    <% end %>
+    
+    jsonData.categories.push(category);
+  <% end %>
+  
+  // 범례 정보 추가 (메인 일감별 색상)
+  <% if main_issue_colors.any? %>
+    <% parent_issues.each do |main_issue| %>
+      jsonData.legends.push({
+        title: "<%= j("##{main_issue.id} : #{main_issue.subject.truncate(30)}") %>",
+        color: "<%= main_issue_colors[main_issue.id] %>",
+        url: "<%= url_for(controller: 'issues', action: 'show', id: main_issue.id, only_path: false) %>"
+      });
+    <% end %>
+  <% end %>
+  
+  // 각 이벤트의 스케줄에 대해 오버랩 처리
+  jsonData.categories.forEach(function(category) {
+    category.events.forEach(function(event) {
+      event.schedules = resolveScheduleOverlaps(event.schedules);
+    });
+  });
+  
+  // 타임라인 그리드 렌더링
+  try {
+    TxTimelineGrid.render('#timeline-grid-container', jsonData, { verticalMarkers: <%= version_markers.to_json.html_safe %>, scrollToToday: true, scrollAlign: 'center', scrollBehavior: 'auto' });
+    console.log('타임라인 그리드 렌더링 완료');
+    
+    // 렌더링 후 페이지 상단(폼 위치)으로 즉시 스크롤
+    window.scrollTo(0, 0);
+  } catch (error) {
+    console.error('타임라인 그리드 렌더링 오류:', error);
+    $('#timeline-grid-container').html('<div class="no-result">타임라인 렌더링 중 오류가 발생했습니다.</div>');
+  }
+  
+  // 스케줄 클릭 이벤트 (선택적)
+  document.getElementById('timeline-grid-container').addEventListener('tx-schedule-click', function(e) {
+    console.log('스케줄 클릭:', e.detail.scheduleName);
+  });
+  
+  // XLSX 다운로드 버튼
+  $('#export-xlsx-btn').on('click', function() {
+    try {
+      var today = new Date();
+      var dateStr = today.getFullYear() + 
+                    String(today.getMonth() + 1).padStart(2, '0') + 
+                    String(today.getDate()).padStart(2, '0');
+      var fileName = '일정요약_' + dateStr;
+      
+      TxXlsxExporter.exportToXlsx(jsonData, fileName)
+        .then(function() {
+          console.log('엑셀 다운로드 완료');
+        })
+        .catch(function(error) {
+          console.error('엑셀 다운로드 오류:', error);
+          alert('엑셀 다운로드 중 오류가 발생했습니다: ' + error.message);
+        });
+      
+    } catch (error) {
+      console.error('데이터 생성 오류:', error);
+      alert('데이터 생성 중 오류가 발생했습니다: ' + error.message);
+    }
+  });
+});
+</script>
+<% end %>
+<br>
+
+<h2>📋 일정요약</h2>
+<p>일감들을 팀과 사용자 기준으로 요약합니다. 입력된 일감의 하위 일감 중 시작일과 완료일이 모두 기재된 일감만 취합됩니다.</p>
+
+<div class="schedule-summary-form" style="margin-top: 30px;">
+  <%= form_tag(request.path, method: :get, id: 'schedule-summary-form') do %>
+
+    <div style="display: flex; gap: 20px; margin-bottom: 20px;">
+      <!-- 왼쪽 컬럼: 일감 목록 + 표기 시작일 -->
+      <div style="flex: 1;">
+        <div class="form-group">
+          <label for="issue_ids">일감 목록 (ID - 제목을 입력하면 ID가 자동 완성 됩니다.</label>
+          <textarea name="issue_ids" id="issue_ids" placeholder="예: 12312, 32123; 42128 35123"><%= params[:issue_ids] %></textarea>
+          <div class="hint">쉼표(,), 세미콜론(;), 공백으로 구분하여 여러 일감 ID를 입력하세요. 번호나 제목을 입력하면 자동완성으로 검색됩니다. 검색 대상은 최상위 부모 일감만 포함됩니다.</div>
+        </div>
+
+        <div class="form-group">
+          <label for="display_start_date">표기 시작일</label>
+          <%
+            # 기본값: 오늘로부터 2개월 전
+            default_display_start_date = 2.months.ago.to_date
+            display_start_date = params[:display_start_date].present? ? Date.parse(params[:display_start_date]) : default_display_start_date
+          %>
+          <input type="date" name="display_start_date" id="display_start_date" value="<%= display_start_date.strftime('%Y-%m-%d') %>" class="form-control" style="max-width: 200px;">
+          <div class="hint">이 날짜 이전에 시작하고 종료되는 일감은 표시에서 제외됩니다.</div>
+        </div>
+      </div>
+
+      <!-- 오른쪽 컬럼: 팀 선택 -->
+      <div style="flex: 1;">
+        <div class="form-group">
+          <label for="group_ids">팀 선택 (다중 선택 가능)</label>
+          <select name="group_ids[]" id="group_ids" multiple style="min-height: 150px;">
+            <% all_groups.each do |group| %>
+              <option value="<%= group.id %>" <%= 'selected' if params[:group_ids]&.include?(group.id.to_s) %>><%= group.name %></option>
+            <% end %>
+          </select>
+          <div class="hint">팀을 선택하지 않으면 전체 팀 기준으로 요약됩니다. Ctrl/Cmd 키를 누르고 클릭하여 여러 팀을 선택할 수 있습니다.</div>
+        </div>
+      </div>
+    </div>
+
+    <div class="form-group">
+      <%= submit_tag '📊 요약', class: 'btn btn-primary' %>
+      <% if params[:issue_ids].present? %>
+        <button type="button" id="export-xlsx-btn" class="btn btn-success" style="margin-left: 10px;">📊 XLSX</button>
+      <% end %>
+    </div>
+  <% end %>
+</div>
+
+<%= javascript_tag do %>
+  // 일감 ID 다중 자동완성 (번호/제목 검색)
+  var issueIdSplitter = /[,;\s]+/;
+  multipleAutocompleteField(
+    'issue_ids',
+    '<%= j tx_base_top_parent_issues_path %>',
+    {
+      source: function(request, response) {
+        var term = request.term.split(issueIdSplitter).pop();
+        if (!term) { response([]); return; }
+
+        var data = { term: term };
+        <% if @project.present? %>
+        data['project_id'] = '<%= @project.id %>';
+        <% else %>
+        data['scope'] = 'all';
+        <% end %>
+
+        $.getJSON('<%= j tx_base_top_parent_issues_path %>', data, response);
+      },
+      select: function(event, ui) {
+        var terms = this.value.split(issueIdSplitter).filter(function(v){ return v.length > 0; });
+        terms.pop(); // 기존 입력 토큰 제거
+        terms.push(String(ui.item.value)); // 선택한 일감 ID만 추가
+        this.value = terms.join(", ") + ", ";
+        return false;
+      }
+    }
+  );
+<% end %>

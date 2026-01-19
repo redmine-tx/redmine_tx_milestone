@@ -1,0 +1,1721 @@
+<script>
+
+
+  // ============================================================
+  // 공용 데이터 수집 함수 - 모든 내보내기/저장 함수가 이 함수를 사용
+  // ============================================================
+  
+  /**
+   * DOM에서 로드맵 데이터를 JSON 구조로 수집
+   * @param {string} name - 로드맵 이름
+   * @param {Object} options - 옵션 객체
+   * @param {boolean} options.includeTimeline - timeline 정보 포함 여부 (XLSX용, 기본값: false)
+   * @returns {Object} JSON 형식의 로드맵 데이터
+   */
+  function collectRoadmapDataAsJSON(name = 'Default', options = {}) {
+    var includeTimeline = options.includeTimeline || false;
+    
+    console.log('=== collectRoadmapDataAsJSON 시작 ===', { name: name, includeTimeline: includeTimeline });
+    
+    var jsonData = {
+      metadata: {
+        exportDate: new Date().toISOString(),
+        name: name,
+        version: "1.0",
+        description: "Redmine 로드맵 데이터"
+      },
+      categories: []
+    };
+    
+    // XLSX 내보내기용: options에 날짜 정보 추가 (기존 JSON 저장 형식과의 호환성을 위해 선택적)
+    if (includeTimeline) {
+      jsonData.options = jsonData.options || {};
+      jsonData.options.startDate = "<%= start_date.strftime('%Y-%m-%d') %>";
+      jsonData.options.endDate = "<%= end_date.strftime('%Y-%m-%d') %>";
+    }
+    
+    // 데이터 캐싱을 위한 변수들
+    var categoryMap = {};
+    var eventMap = {};
+    
+    // 1단계: 모든 DOM 요소를 한 번에 가져와서 캐싱
+    var allCategoryHeaders = $('.category-header').toArray();
+    var allProjectItems = $('.project-item').toArray();
+    var allTimelineRows = $('.timeline-row').toArray();
+    
+    // 2단계: 카테고리별로 데이터 맵 생성
+    allCategoryHeaders.forEach(function(header) {
+      var $header = $(header);
+      var categoryIndex = $header.data('category-index');
+      var categoryName = $header.find('.category-title').text().trim();
+      
+      var categoryData = {
+        name: categoryName,
+        index: categoryIndex,
+        events: []
+      };
+      
+      // 카테고리 커스텀 색상 정보 추가
+      if (categoryColors[categoryName]) {
+        categoryData.customColor = categoryColors[categoryName];
+      }
+      
+      categoryMap[categoryIndex] = categoryData;
+    });
+    
+    // 3단계: 이벤트별로 데이터 맵 생성
+    allProjectItems.forEach(function(item) {
+      var $item = $(item);
+      var categoryIndex = $item.data('category-index');
+      var eventName = $item.find('.project-name').text().trim();
+      
+      if (categoryMap[categoryIndex]) {
+        var eventData = {
+          name: eventName,
+          schedules: []
+        };
+        categoryMap[categoryIndex].events.push(eventData);
+        eventMap[categoryIndex + '_' + eventName] = eventData;
+      }
+    });
+    
+    // 4단계: 타임라인 행별로 스케줄 일괄 처리
+    allTimelineRows.forEach(function(row) {
+      var $row = $(row);
+      var categoryName = $row.data('category-name');
+      var eventName = $row.data('event-name');
+      
+      // 해당 카테고리 찾기
+      var category = Object.values(categoryMap).find(function(c) { return c.name === categoryName; });
+      if (!category) return;
+      
+      var eventKey = category.index + '_' + eventName;
+      var eventData = eventMap[eventKey];
+      if (!eventData) return;
+      
+      // 스케줄 바들을 한 번에 처리
+      var scheduleBars = $row.find('.project-bar').toArray();
+      scheduleBars.forEach(function(bar, barIndex) {
+        var $bar = $(bar);
+        var title = $bar.attr('title') || '';
+        var scheduleName = $bar.attr('data-schedule-name') || $bar.find('.project-bar-text').text().trim();
+        
+        // 날짜 추출
+        var dateMatch = title.match(/\((\d{4}-\d{2}-\d{2}) ~ (\d{4}-\d{2}-\d{2})\)/);
+        
+        // 이슈 추출
+        var issueNumber = $bar.attr('data-issue-number') || '';
+        var doneRatio = $bar.attr('data-done-ratio') || null;
+        
+        var scheduleData = {
+          name: scheduleName,
+          startDate: dateMatch ? dateMatch[1] : null,
+          endDate: dateMatch ? dateMatch[2] : null,
+          issue: issueNumber,
+          doneRatio: doneRatio
+        };
+        
+        // 개별 스케줄 색상
+        var scheduleIndex = $bar.data('schedule-index') || barIndex;
+        var scheduleKey = eventName + '_' + scheduleIndex;
+        if (scheduleColors[scheduleKey]) {
+          scheduleData.customColor = scheduleColors[scheduleKey];
+        }
+        
+        eventData.schedules.push(scheduleData);
+      });
+    });
+    
+    // 5단계: 최종 데이터 구조 생성
+    jsonData.categories = Object.values(categoryMap);
+    
+    console.log('=== collectRoadmapDataAsJSON 완료 ===', jsonData);
+    return jsonData;
+  }
+  
+  // ============================================================
+  // JSON 내보내기 함수 (파일 다운로드)
+  // ============================================================
+  
+  /**
+   * JSON 데이터 내보내기 함수 - 파일로 다운로드
+   * 호환성: 기존 JSON 형식 유지 (timeline 미포함)
+   */
+  function exportRoadmapData(name = 'Default') {
+    console.log('JSON 데이터 내보내기 시작');
+    
+    // 공용 함수로 데이터 수집 (timeline 미포함 - 기존 형식 유지)
+    var exportData = collectRoadmapDataAsJSON(name, { includeTimeline: false });
+    
+    // JSON 파일로 다운로드
+    var jsonString = JSON.stringify(exportData, null, 2);
+    var blob = new Blob([jsonString], { type: 'application/json' });
+    var url = URL.createObjectURL(blob);
+    
+    var downloadLink = document.createElement('a');
+    downloadLink.href = url;
+    downloadLink.download = 'Roadmap_' + name + '_' + formatLocalDate(new Date()) + '.json';
+    document.body.appendChild(downloadLink);
+    downloadLink.click();
+    document.body.removeChild(downloadLink);
+    URL.revokeObjectURL(url);
+    
+    console.log('JSON 데이터 내보내기 완료');
+    alert('로드맵 데이터가 JSON 파일로 내보내졌습니다.');
+  }
+
+  function importRoadmapFromJSON( importData )
+  {
+    // 기존 데이터 삭제
+      clearAllRoadmapData();
+      
+      // 새 데이터 적용
+      applyImportedData(importData);
+      
+      // 추가적인 레이아웃 초기화 (JSON 파일 불러오기용)
+      setTimeout(function() {
+        // 라인 높이 추가 업데이트
+        //updateLineHeight();
+        
+        // 스크롤 위치 복원 (오늘 날짜 위치)
+        var todayPosition = <%= today_position %>;
+        var timelineContainer = $('.roadmap-timeline');
+        var containerWidth = timelineContainer.width();
+        var scrollLeft = Math.max(0, todayPosition - containerWidth * 0.2);
+        timelineContainer.scrollLeft(scrollLeft);
+      }, 200);
+  }
+
+  // JSON 데이터 불러오기 함수
+  function importRoadmapData(file) {
+    console.log('JSON 데이터 불러오기 시작');
+    
+    var reader = new FileReader();
+    reader.onload = function(e) {
+      try {
+        var importData = JSON.parse(e.target.result);
+        
+        // 데이터 유효성 검사
+        if (!importData.categories || !Array.isArray(importData.categories)) {
+          throw new Error('올바르지 않은 JSON 형식입니다.');
+        }
+        
+        // 확인 대화상자
+        if (!confirm('현재 로드맵 데이터를 모두 삭제하고 새 데이터로 교체하시겠습니까?\n\n이 작업은 되돌릴 수 없습니다.')) {
+          return;
+        }
+        
+        importRoadmapFromJSON(importData);        
+        
+        console.log('JSON 데이터 불러오기 완료');
+        alert('로드맵 데이터가 성공적으로 불러와졌습니다.');
+        
+      } catch (error) {
+        console.error('JSON 파싱 오류:', error);
+        alert('JSON 파일을 읽는 중 오류가 발생했습니다: ' + error.message);
+      }
+    };
+    
+    reader.readAsText(file);
+  }
+
+  // ============================================================
+   // XLSX 로드맵 데이터 내보내기 함수 (TxXlsxExporter 사용)
+   // ============================================================
+   
+   /**
+    * XLSX 로드맵 데이터 내보내기 함수
+    * TxXlsxExporter (redmine_tx_0_base)를 사용하여 Excel 파일 생성
+    */
+   function exportRoadmapToXlsx() {
+     console.log('XLSX 로드맵 데이터 내보내기 시작');
+     
+     var xlsxBtn = $('#exportXlsxBtn');
+     var originalText = xlsxBtn.html();
+     
+     try {
+       // TxXlsxExporter 라이브러리 로드 확인
+       if (typeof TxXlsxExporter === 'undefined') {
+         throw new Error('TxXlsxExporter 라이브러리가 로드되지 않았습니다. 페이지를 새로고침해주세요.');
+       }
+       
+       // ExcelJS 라이브러리 로드 확인
+       if (typeof ExcelJS === 'undefined') {
+         throw new Error('ExcelJS 라이브러리가 로드되지 않았습니다. 페이지를 새로고침해주세요.');
+       }
+       
+       // 공용 함수로 데이터 수집 (timeline 포함 - XLSX용)
+       var jsonData = collectRoadmapDataAsJSON('roadmap', { includeTimeline: true });
+       
+       // 데이터 유효성 확인
+       if (!jsonData.categories || jsonData.categories.length === 0) {
+         alert('내보낼 데이터가 없습니다. 먼저 카테고리와 이벤트를 추가해주세요.');
+         return;
+       }
+       
+       // 버튼 상태 변경
+       xlsxBtn.html('<span class="json-btn-icon">⏳</span>내보내는 중...');
+       xlsxBtn.prop('disabled', true);
+       
+       // 파일명 생성
+       var fileName = 'roadmap_' + formatLocalDate(new Date());
+       
+       // TxXlsxExporter를 사용하여 Excel 파일 생성 및 다운로드
+       TxXlsxExporter.exportToXlsx(jsonData, fileName)
+         .then(function() {
+           console.log('✅ XLSX 로드맵 데이터 내보내기 완료');
+           alert('로드맵 데이터가 Excel 파일로 내보내졌습니다.');
+           
+           // 버튼 상태 복원
+           xlsxBtn.html(originalText);
+           xlsxBtn.prop('disabled', false);
+         })
+         .catch(function(error) {
+           console.error('XLSX 내보내기 오류:', error);
+           alert('Excel 파일 내보내기 중 오류가 발생했습니다:\n\n' + error.message);
+           
+           // 버튼 상태 복원
+           xlsxBtn.html(originalText);
+           xlsxBtn.prop('disabled', false);
+         });
+       
+     } catch (error) {
+       console.error('XLSX 내보내기 초기 오류:', error);
+       alert('Excel 파일 내보내기 초기화 중 오류가 발생했습니다:\n\n' + error.message);
+       
+       // 버튼 상태 복원
+       xlsxBtn.html(originalText);
+       xlsxBtn.prop('disabled', false);
+     }
+  }
+
+   // PNG 로드맵 이미지 내보내기 함수
+   function exportRoadmapToPng() {
+     console.log('PNG 로드맵 이미지 내보내기 시작');
+     
+     var pngBtn = $('#exportPngBtn');
+     var originalText = pngBtn.html();
+     
+     try {
+       // html2canvas 라이브러리 로드 확인
+       if (typeof html2canvas === 'undefined') {
+         throw new Error('html2canvas 라이브러리가 로드되지 않았습니다. 페이지를 새로고침해주세요.');
+       }
+       
+       // 캡처할 요소 선택
+       var roadmapContainer = $('.roadmap-container');
+       
+       if (roadmapContainer.length === 0) {
+         throw new Error('로드맵 컨테이너를 찾을 수 없습니다.');
+       }
+       
+       // 이벤트가 있는 영역만 캡처하기 위한 계산
+       var timelineElement = roadmapContainer.find('.roadmap-timeline')[0];
+       var timelineBodyElement = roadmapContainer.find('.timeline-body')[0];
+       
+       // 모든 프로젝트 바의 위치를 분석하여 실제 사용 영역 계산
+       var projectBars = roadmapContainer.find('.project-bar');
+       var sidebarWidth = 300;
+       var minLeft = Infinity;
+       var maxRight = -Infinity;
+       
+       // 두 번째 행: 일 헤더
+       var dayRow = ['', ''];
+       days.forEach(function(day) {
+         dayRow.push(day);
+       });
+       worksheet.addRow(dayRow);
+       
+       // 월 헤더 병합
+       colIndex = 3;
+       months.forEach(function(month) {
+         if (month.days > 1) {
+           worksheet.mergeCells(1, colIndex, 1, colIndex + month.days - 1);
+         }
+         colIndex += month.days;
+       });
+       
+       // 데이터 행들 및 스케줄 바 생성
+       var currentRowIndex = 3;
+       
+      // JSON 데이터에서 카테고리 순회
+      jsonData.categories.forEach(function(category, categoryIndex) {
+        var categoryName = category.name;
+        // customColor가 있을 때만 배경색 적용
+        var categoryColor = category.customColor;
+         
+         // 카테고리 행 추가
+         var categoryRow = ['', ''];
+         days.forEach(function() {
+           categoryRow.push('');
+         });
+         categoryRow[0] = categoryName;
+         worksheet.addRow(categoryRow);
+         
+         var categoryRowStart = currentRowIndex;
+         currentRowIndex++;
+         
+         // 해당 카테고리의 이벤트들 처리
+         var eventRowsCount = 0;
+         
+         category.events.forEach(function(event) {
+           var eventName = event.name;
+           
+           // 이벤트 행 초기화
+           var eventRow = ['', eventName];
+           days.forEach(function() {
+             eventRow.push('');
+           });
+           
+           // 해당 이벤트의 스케줄들 처리
+           event.schedules.forEach(function(schedule, scheduleIndex) {
+             var scheduleName = schedule.name;
+             var issueNumber = schedule.issue || '';
+             var doneRatio = schedule.doneRatio || null;
+             
+             // 스케줄 색상 결정 (개별 색상 > 카테고리 색상 우선순위)
+             var scheduleColor = schedule.customColor || categoryColor;
+             
+             // 날짜가 있는 경우에만 처리
+             if (schedule.startDate && schedule.endDate) {
+               var scheduleStartDate = new Date(schedule.startDate);
+               var scheduleEndDate = new Date(schedule.endDate);
+               
+               if (!isNaN(scheduleStartDate.getTime()) && !isNaN(scheduleEndDate.getTime())) {
+                 var startDayIndex = Math.floor((scheduleStartDate - startDate) / (1000 * 60 * 60 * 24));
+                 var endDayIndex = Math.floor((scheduleEndDate - startDate) / (1000 * 60 * 60 * 24));
+                 
+                 var excelStartCol = startDayIndex + 3; // ExcelJS는 1-based
+                 var excelEndCol = endDayIndex + 3;
+                 
+                 if (excelStartCol >= 3 && excelStartCol <= eventRow.length) {
+                   eventRow[excelStartCol - 1] = scheduleName; // 0-based로 변환
+                   
+                   // 스케줄 바 병합 및 스타일 적용을 위한 정보 저장
+                   // 하루짜리 스케줄도 포함하도록 >= 조건 사용
+                   if (excelEndCol >= excelStartCol) {
+                     console.log('Excel 내보내기 - 이벤트:', eventName, '스케줄:', scheduleName, '인덱스:', scheduleIndex, '색상:', scheduleColor);
+                     
+                     // 병합 정보를 배열에 저장 (나중에 일괄 처리)
+                     if (!worksheet.scheduleMerges) {
+                       worksheet.scheduleMerges = [];
+                     }
+                     worksheet.scheduleMerges.push({
+                       row: currentRowIndex,
+                       startCol: excelStartCol,
+                       endCol: excelEndCol,
+                       issueNumber: issueNumber,
+                       categoryColor: scheduleColor,
+                       scheduleName: scheduleName,
+                       isCustomColor: !!schedule.customColor,
+                       doneRatio: doneRatio
+                     });
+                   }
+                 }
+               }
+             }
+           });
+           
+           worksheet.addRow(eventRow);
+           eventRowsCount++;
+           currentRowIndex++;
+         });
+         
+         // 카테고리 병합
+         if (eventRowsCount > 0) {
+           worksheet.mergeCells(categoryRowStart, 1, categoryRowStart + eventRowsCount, 1);
+           
+           // 카테고리 셀에 색상 적용
+           var categoryCell = worksheet.getCell(categoryRowStart, 1);
+           
+           if (categoryColor) {
+             var fillColor = categoryColor.replace('#', 'FF'); // ARGB 형식
+             
+             // 텍스트 색상 자동 조정
+             var rgb = categoryColor.replace('#', '');
+             var r = parseInt(rgb.substr(0, 2), 16);
+             var g = parseInt(rgb.substr(2, 2), 16);
+             var b = parseInt(rgb.substr(4, 2), 16);
+             var brightness = (r * 299 + g * 587 + b * 114) / 1000;
+             var fontColor = brightness > 128 ? 'FF000000' : 'FFFFFFFF';
+             
+             categoryCell.fill = {
+               type: 'pattern',
+               pattern: 'solid',
+               fgColor: { argb: fillColor }
+             };
+             
+             categoryCell.font = {
+               color: { argb: fontColor },
+               bold: true,
+               size: 11
+             };
+           } else {
+             // 기본 스타일
+             categoryCell.font = {
+               bold: true,
+               size: 11
+             };
+           }
+           
+           categoryCell.alignment = {
+             horizontal: 'center',
+             vertical: 'middle'
+           };
+         }
+       });
+       
+       // 컬럼 너비 설정
+       worksheet.getColumn(1).width = 20; // 카테고리
+       worksheet.getColumn(2).width = 25; // 이벤트
+       for (var i = 3; i <= days.length + 2; i++) {
+         worksheet.getColumn(i).width = 2.8; // 일별 컬럼 (30% 축소: 4 * 0.7 = 2.8)
+       }
+       
+       // 헤더 스타일 적용
+       applyHeaderStylesFromJSON(worksheet, days.length + 2, timeline);
+       
+       // 틀 고정 설정 (C3 셀 기준)
+       worksheet.views = [
+         {
+           state: 'frozen',
+           xSplit: 2,  // C 컬럼 기준 (A=0, B=1, C=2)
+           ySplit: 2,  // 3행 기준 (0-based이므로 2)
+           topLeftCell: 'C3',
+           activeCell: 'C3'
+         }
+       ];
+       
+       // 스케줄 바 병합 및 스타일 적용
+       if (worksheet.scheduleMerges && worksheet.scheduleMerges.length > 0) {
+         console.log('스케줄 바 병합 개수:', worksheet.scheduleMerges.length);
+         worksheet.scheduleMerges.forEach(function(merge) {
+           try {
+             // 하루짜리 스케줄이 아닌 경우에만 병합 실행
+             if (merge.startCol < merge.endCol) {
+               worksheet.mergeCells(merge.row, merge.startCol, merge.row, merge.endCol);
+               console.log('병합 완료:', merge.scheduleName, '행:', merge.row, '열:', merge.startCol, '-', merge.endCol);
+             } else {
+               console.log('하루짜리 스케줄 (병합 없음):', merge.scheduleName, '행:', merge.row, '열:', merge.startCol);
+             }
+             
+             // 스타일은 모든 경우에 적용
+             applyScheduleBarStyle(worksheet, merge.row, merge.startCol, merge.endCol, merge.issueNumber, merge.categoryColor, merge.doneRatio);
+             
+           } catch (mergeError) {
+             console.error('병합 오류:', mergeError, merge);
+           }
+         });
+       }
+       
+     } catch (error) {
+       console.error('ExcelJS 로드맵 타임라인 시트 생성 오류:', error);
+     }
+   }  
+   
+   // ============================================================
+   // ExcelJS용 스케줄 리스트 시트 생성 함수 (리팩토링 버전 - JSON 기반)
+   // ============================================================
+   
+   /**
+    * ExcelJS용 스케줄 리스트 시트 생성 함수
+    * @param {ExcelJS.Workbook} workbook - ExcelJS 워크북 객체
+    * @param {Object} jsonData - collectRoadmapDataAsJSON()에서 반환된 JSON 데이터
+    */
+   function createScheduleListSheetExcelJS(workbook, jsonData) {
+     try {
+       var worksheet = workbook.addWorksheet('스케줄 리스트');
+       
+       // 헤더 행 추가
+       var headerRow = worksheet.addRow(['카테고리', '이벤트', '스케줄명', '시작일', '종료일', '이슈', '기간', '완료율']);
+       
+       // 헤더 스타일 적용
+       headerRow.eachCell(function(cell) {
+         cell.font = { bold: true };
+         cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFE6E6E6' } };
+         cell.alignment = { horizontal: 'center', vertical: 'middle' };
+         cell.border = {
+           top: { style: 'thin' },
+           left: { style: 'thin' },
+           bottom: { style: 'thin' },
+           right: { style: 'thin' }
+         };
+       });
+       
+       // JSON 데이터에서 카테고리 순회
+       jsonData.categories.forEach(function(category) {
+         var categoryName = category.name;
+         
+         category.events.forEach(function(event) {
+           var eventName = event.name;
+           var hasSchedules = false;
+           
+           event.schedules.forEach(function(schedule) {
+             var scheduleName = schedule.name;
+             var startDateStr = schedule.startDate || '';
+             var endDateStr = schedule.endDate || '';
+             var duration = '';
+             
+             // 기간 계산
+             if (startDateStr && endDateStr) {
+               var start = new Date(startDateStr);
+               var end = new Date(endDateStr);
+               if (!isNaN(start.getTime()) && !isNaN(end.getTime())) {
+                 var diffTime = Math.abs(end - start);
+                 var diffDays = Math.ceil(diffTime / (1000 * 60 * 60 * 24)) + 1;
+                 duration = diffDays + '일';
+               }
+             }
+             
+             var issueNumber = schedule.issue || '';
+             var doneRatio = schedule.doneRatio || null;
+             
+             var dataRow = worksheet.addRow([categoryName, eventName, scheduleName, startDateStr, endDateStr, issueNumber, duration, doneRatio]);
+             
+             // 데이터 행 스타일 적용
+             dataRow.eachCell(function(cell) {
+               cell.border = {
+                 top: { style: 'thin' },
+                 left: { style: 'thin' },
+                 bottom: { style: 'thin' },
+                 right: { style: 'thin' }
+               };
+               cell.alignment = { horizontal: 'left', vertical: 'middle' };
+             });
+             
+             hasSchedules = true;
+           });
+           
+           // 스케줄이 없는 경우
+           if (!hasSchedules) {
+             var dataRow = worksheet.addRow([categoryName, eventName, '(스케줄 없음)', '', '', '', '', '']);
+             dataRow.eachCell(function(cell) {
+               cell.border = {
+                 top: { style: 'thin' },
+                 left: { style: 'thin' },
+                 bottom: { style: 'thin' },
+                 right: { style: 'thin' }
+               };
+               cell.alignment = { horizontal: 'left', vertical: 'middle' };
+             });
+           }
+         });
+       });
+       
+       // 컬럼 너비 설정
+       worksheet.getColumn(1).width = 20; // 카테고리
+       worksheet.getColumn(2).width = 25; // 이벤트
+       worksheet.getColumn(3).width = 30; // 스케줄명
+       worksheet.getColumn(4).width = 12; // 시작일
+       worksheet.getColumn(5).width = 12; // 종료일
+       worksheet.getColumn(6).width = 10; // 이슈
+       worksheet.getColumn(7).width = 8;  // 기간
+       
+     } catch (error) {
+       console.error('ExcelJS 스케줄 리스트 시트 생성 오류:', error);
+     }
+   }
+   
+   // ExcelJS용 스케줄 바 스타일 적용 함수
+   function applyScheduleBarStyle(worksheet, rowIndex, startCol, endCol, issueNumber, categoryColor, doneRatio) {
+     try {
+       // 셀 가져오기 (병합은 이미 완료됨)
+       var cell = worksheet.getCell(rowIndex, startCol);
+       
+       console.log('스타일 적용 시작:', '행:', rowIndex, '열:', startCol, '카테고리색상:', categoryColor);
+       
+       // 색상 결정
+       var fillColor = '';
+       var fontColor = 'FFFFFFFF'; // 기본 흰색
+       
+       if (categoryColor) {
+         // 카테고리 색상 우선 적용
+         fillColor = categoryColor.replace('#', 'FF'); // ARGB 형식
+         
+         // 텍스트 색상 자동 조정
+         var rgb = categoryColor.replace('#', '');
+         var r = parseInt(rgb.substr(0, 2), 16);
+         var g = parseInt(rgb.substr(2, 2), 16);
+         var b = parseInt(rgb.substr(4, 2), 16);
+         var brightness = (r * 299 + g * 587 + b * 114) / 1000;
+         
+         if (brightness > 128) {
+           fontColor = 'FF000000'; // 밝은 배경에는 검은 글씨
+         }
+       }
+       
+       // 스타일 적용
+       cell.fill = {
+         type: 'pattern',
+         pattern: 'solid',
+         fgColor: { argb: fillColor }
+       };
+       
+       cell.font = {
+         color: { argb: fontColor },
+         bold: true,
+         size: 8
+       };
+       
+       cell.alignment = {
+         horizontal: 'center',
+         vertical: 'middle',
+         wrapText: true
+       };
+       
+       cell.border = {
+         top: { style: 'thin' },
+         left: { style: 'thin' },
+         bottom: { style: 'thin' },
+         right: { style: 'thin' }
+       };
+       
+       console.log('스타일 적용 완료:', '배경색:', fillColor, '글자색:', fontColor);
+       
+     } catch (error) {
+       console.error('ExcelJS 스케줄 바 스타일 적용 오류:', error);
+     }
+   }
+
+   // 날짜 값에서 요일 계산하는 함수 (기존 호환성 유지)
+   function getDayOfWeek(dayValue, colIndex) {
+     try {
+       var startDate = new Date(<%= start_date.to_time.to_i * 1000 %>);
+       var dayNumber = parseInt(dayValue);
+       
+       if (isNaN(dayNumber)) {
+         return -1; // 유효하지 않은 날짜
+       }
+       
+       // 컬럼 인덱스로부터 날짜 계산 (3열부터 시작)
+       var daysFromStart = colIndex - 3;
+       var currentDate = new Date(startDate);
+       currentDate.setDate(startDate.getDate() + daysFromStart);
+       
+       return currentDate.getDay(); // 0: 일요일, 1: 월요일, ..., 6: 토요일
+     } catch (error) {
+       console.error('getDayOfWeek 오류:', error);
+       return -1;
+     }
+   }
+   
+   /**
+    * 날짜 값에서 요일 계산하는 함수 (JSON timeline 정보 사용)
+    * @param {string} dayValue - 일(day) 값
+    * @param {number} colIndex - 엑셀 컬럼 인덱스
+    * @param {number} startDateTimestamp - 시작 날짜 타임스탬프
+    */
+   function getDayOfWeekFromTimeline(dayValue, colIndex, startDateTimestamp) {
+     try {
+       var startDate = new Date(startDateTimestamp);
+       var dayNumber = parseInt(dayValue);
+       
+       if (isNaN(dayNumber)) {
+         return -1; // 유효하지 않은 날짜
+       }
+       
+       // 컬럼 인덱스로부터 날짜 계산 (3열부터 시작)
+       var daysFromStart = colIndex - 3;
+       var currentDate = new Date(startDate);
+       currentDate.setDate(startDate.getDate() + daysFromStart);
+       
+       return currentDate.getDay(); // 0: 일요일, 1: 월요일, ..., 6: 토요일
+     } catch (error) {
+       console.error('getDayOfWeekFromTimeline 오류:', error);
+       return -1;
+     }
+   }
+
+   // ============================================================
+   // ExcelJS용 헤더 스타일 적용 함수 (JSON timeline 정보 사용)
+   // ============================================================
+   
+   /**
+    * ExcelJS용 헤더 스타일 적용 함수 (JSON 기반)
+    * @param {ExcelJS.Worksheet} worksheet - 워크시트 객체
+    * @param {number} columnCount - 컬럼 개수
+    * @param {Object} timeline - timeline 정보 (startDate, months, days)
+    */
+   function applyHeaderStylesFromJSON(worksheet, columnCount, timeline) {
+     try {
+       var startDateTimestamp = timeline.startDate;
+       
+       // 첫 번째 행 (월 헤더)
+       for (var col = 1; col <= columnCount; col++) {
+         var cell = worksheet.getCell(1, col);
+         cell.font = { bold: true };
+         cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFE6E6E6' } };
+         cell.alignment = { horizontal: 'center', vertical: 'middle' };
+         
+         // 날짜 컬럼에 대해 월 구분선 확인 (두 번째 행의 값 확인)
+         var isMonthBoundary = false;
+         if (col >= 3) {
+           var dayHeaderCell = worksheet.getCell(2, col);
+           var dayValue = dayHeaderCell.value;
+           if (dayValue && dayValue.toString() === '1') {
+             isMonthBoundary = true;
+           }
+         }
+         
+         // 월 구분선은 1일 셀의 왼쪽만 검은색, 오른쪽은 회색
+         if (isMonthBoundary) {
+           cell.border = {
+             top: { style: 'thin' },
+             left: { style: 'thin' }, // 1일 셀의 왼쪽은 검은색
+             bottom: { style: 'thin' },
+             right: { style: 'thin', color: { argb: 'FFD0D0D0' } } // 1일 셀의 오른쪽은 회색
+           };
+         } else {
+           cell.border = {
+             top: { style: 'thin' },
+             left: { style: 'thin', color: { argb: col >= 3 ? 'FFD0D0D0' : 'FF000000' } },
+             bottom: { style: 'thin' },
+             right: { style: 'thin', color: { argb: col >= 3 ? 'FFD0D0D0' : 'FF000000' } }
+           };
+         }
+       }
+       
+       // 두 번째 행 (일 헤더) - 볼드체 제거 및 요일별 색상 적용
+       for (var col = 1; col <= columnCount; col++) {
+         var cell = worksheet.getCell(2, col);
+         var cellValue = cell.value;
+         
+         // 볼드체 제거
+         cell.font = { bold: false };
+         
+         // 요일별 색상 적용 (3열부터 날짜 데이터)
+         if (col >= 3 && cellValue) {
+           var dayValue = cellValue.toString();
+           var dayOfWeek = getDayOfWeekFromTimeline(dayValue, col, startDateTimestamp);
+           
+           if (dayOfWeek === 0) { // 일요일
+             cell.font = { bold: false, color: { argb: 'FFFF0000' } }; // 빨간색
+           } else if (dayOfWeek === 6) { // 토요일
+             cell.font = { bold: false, color: { argb: 'FF0000FF' } }; // 파란색
+           }
+         }
+         
+         cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFE6E6E6' } };
+         cell.alignment = { horizontal: 'center', vertical: 'middle' };
+         
+         // 날짜 컬럼에 대해 월 구분선 확인
+         var isMonthBoundary = false;
+         if (col >= 3 && cellValue && cellValue.toString() === '1') {
+           isMonthBoundary = true;
+         }
+         
+         // 월 구분선은 1일 셀의 왼쪽만 검은색, 오른쪽은 회색
+         if (isMonthBoundary) {
+           cell.border = {
+             top: { style: 'thin' },
+             left: { style: 'thin' }, // 1일 셀의 왼쪽은 검은색
+             bottom: { style: 'thin' },
+             right: { style: 'thin', color: { argb: 'FFD0D0D0' } } // 1일 셀의 오른쪽은 회색
+           };
+         } else {
+           cell.border = {
+             top: { style: 'thin' },
+             left: { style: 'thin', color: { argb: col >= 3 ? 'FFD0D0D0' : 'FF000000' } },
+             bottom: { style: 'thin' },
+             right: { style: 'thin', color: { argb: col >= 3 ? 'FFD0D0D0' : 'FF000000' } }
+           };
+         }
+       }
+       
+       // 카테고리 및 이벤트 컬럼 스타일
+       var rowCount = worksheet.rowCount;
+       var lastCategoryRow = -1;
+       var isEventInCategoryAppeared = false;
+       
+       for (var row = 3; row <= rowCount; row++) {
+         // 카테고리 컬럼
+         var categoryCell = worksheet.getCell(row, 1);
+         if (categoryCell.value) {
+           categoryCell.font = { bold: true };
+           categoryCell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFF0F0F0' } };
+           lastCategoryRow = row;
+           isEventInCategoryAppeared = false;
+         }
+         categoryCell.alignment = { horizontal: 'left', vertical: 'middle' };
+         categoryCell.border = {
+           top: { style: 'thin' },
+           left: { style: 'thin' },
+           bottom: { style: 'thin' },
+           right: { style: 'thin' }
+         };
+         
+         // 이벤트 컬럼
+         var eventCell = worksheet.getCell(row, 2);
+         eventCell.alignment = { horizontal: 'left', vertical: 'middle' };
+         eventCell.border = {
+           top: { style: 'thin' },
+           left: { style: 'thin' },
+           bottom: { style: 'thin' },
+           right: { style: 'thin' }
+         };
+         
+         // 이벤트 행 처리
+         var isSeparatorRow = false;
+         if (eventCell.value && eventCell.value.toString().trim() !== '') {
+           isEventInCategoryAppeared = true;
+           // 첫 번째 이벤트 행 - 높이 2배로 유지, 기본 배경
+           worksheet.getRow(row).height = 30; // 기본 높이 15의 2배 
+         }
+         else
+         {
+            if( !isEventInCategoryAppeared )
+            {
+              // 구분용 행 - 높이 1/3로 축소, 회색 배경
+              worksheet.getRow(row).height = 5; // 기본 높이 15의 1/3
+              eventCell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFD0D0D0' } }; // 회색 배경
+              isSeparatorRow = true;
+              // 구분용 행인 경우 카테고리 셀에도 회색 배경 적용
+              categoryCell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFD0D0D0' } };
+            }
+          }
+         
+         // 일별 컬럼들
+         for (var col = 3; col <= columnCount; col++) {
+           var cell = worksheet.getCell(row, col);
+           
+           // 날짜 데이터에서 월 구분선 확인
+           var dayHeaderCell = worksheet.getCell(2, col);
+           var dayValue = dayHeaderCell.value;
+           var isMonthBoundary = false;
+           
+           // 1일인 경우 월 구분선으로 처리
+           if (dayValue && dayValue.toString() === '1') {
+             isMonthBoundary = true;
+           }
+           
+           // 월 구분선은 1일 셀의 왼쪽만 검은색, 오른쪽은 회색
+           if (isMonthBoundary) {
+             cell.border = {
+               top: { style: 'thin' },
+               left: { style: 'thin' }, // 1일 셀의 왼쪽은 검은색
+               bottom: { style: 'thin' },
+               right: { style: 'thin', color: { argb: 'FFD0D0D0' } } // 1일 셀의 오른쪽은 회색
+             };
+           } else {
+             cell.border = {
+               top: { style: 'thin' },
+               left: { style: 'thin', color: { argb: 'FFD0D0D0' } },
+               bottom: { style: 'thin' },
+               right: { style: 'thin', color: { argb: 'FFD0D0D0' } }
+             };
+           }
+           
+           // 구분용 열의 모든 셀에 회색 배경 적용
+           if (isSeparatorRow) {
+             cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFD0D0D0' } };
+           }
+         }
+       }
+       
+     } catch (error) {
+       console.error('applyHeaderStylesFromJSON 오류:', error);
+     }
+   }
+
+   // ExcelJS용 헤더 스타일 적용 함수 (기존 호환성 유지)
+   function applyHeaderStyles(worksheet, columnCount) {
+     try {
+       // 첫 번째 행 (월 헤더)
+       for (var col = 1; col <= columnCount; col++) {
+         var cell = worksheet.getCell(1, col);
+         cell.font = { bold: true };
+         cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFE6E6E6' } };
+         cell.alignment = { horizontal: 'center', vertical: 'middle' };
+         
+         // 날짜 컬럼에 대해 월 구분선 확인 (두 번째 행의 값 확인)
+         var isMonthBoundary = false;
+         if (col >= 3) {
+           var dayHeaderCell = worksheet.getCell(2, col);
+           var dayValue = dayHeaderCell.value;
+           if (dayValue && dayValue.toString() === '1') {
+             isMonthBoundary = true;
+           }
+         }
+         
+         // 월 구분선은 1일 셀의 왼쪽만 검은색, 오른쪽은 회색
+         if (isMonthBoundary) {
+           cell.border = {
+             top: { style: 'thin' },
+             left: { style: 'thin' }, // 1일 셀의 왼쪽은 검은색
+             bottom: { style: 'thin' },
+             right: { style: 'thin', color: { argb: 'FFD0D0D0' } } // 1일 셀의 오른쪽은 회색
+           };
+         } else {
+           cell.border = {
+             top: { style: 'thin' },
+             left: { style: 'thin', color: { argb: col >= 3 ? 'FFD0D0D0' : 'FF000000' } },
+             bottom: { style: 'thin' },
+             right: { style: 'thin', color: { argb: col >= 3 ? 'FFD0D0D0' : 'FF000000' } }
+           };
+         }
+       }
+       
+       // 두 번째 행 (일 헤더) - 볼드체 제거 및 요일별 색상 적용
+       for (var col = 1; col <= columnCount; col++) {
+         var cell = worksheet.getCell(2, col);
+         var cellValue = cell.value;
+         
+         // 볼드체 제거
+         cell.font = { bold: false };
+         
+         // 요일별 색상 적용 (3열부터 날짜 데이터)
+         if (col >= 3 && cellValue) {
+           var dayValue = cellValue.toString();
+           var dayOfWeek = getDayOfWeek(dayValue, col);
+           
+           if (dayOfWeek === 0) { // 일요일
+             cell.font = { bold: false, color: { argb: 'FFFF0000' } }; // 빨간색
+           } else if (dayOfWeek === 6) { // 토요일
+             cell.font = { bold: false, color: { argb: 'FF0000FF' } }; // 파란색
+           }
+         }
+         
+         cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFE6E6E6' } };
+         cell.alignment = { horizontal: 'center', vertical: 'middle' };
+         
+         // 날짜 컬럼에 대해 월 구분선 확인
+         var isMonthBoundary = false;
+         if (col >= 3 && cellValue && cellValue.toString() === '1') {
+           isMonthBoundary = true;
+         }
+         
+         // 월 구분선은 1일 셀의 왼쪽만 검은색, 오른쪽은 회색
+         if (isMonthBoundary) {
+           cell.border = {
+             top: { style: 'thin' },
+             left: { style: 'thin' }, // 1일 셀의 왼쪽은 검은색
+             bottom: { style: 'thin' },
+             right: { style: 'thin', color: { argb: 'FFD0D0D0' } } // 1일 셀의 오른쪽은 회색
+           };
+         } else {
+           cell.border = {
+             top: { style: 'thin' },
+             left: { style: 'thin', color: { argb: col >= 3 ? 'FFD0D0D0' : 'FF000000' } },
+             bottom: { style: 'thin' },
+             right: { style: 'thin', color: { argb: col >= 3 ? 'FFD0D0D0' : 'FF000000' } }
+           };
+         }
+       }
+       
+       // 카테고리 및 이벤트 컬럼 스타일
+       var rowCount = worksheet.rowCount;
+       var lastCategoryRow = -1;
+       var isEventInCategoryAppeared = false;
+       
+       for (var row = 3; row <= rowCount; row++) {
+         // 카테고리 컬럼
+         var categoryCell = worksheet.getCell(row, 1);
+         if (categoryCell.value) {
+           categoryCell.font = { bold: true };
+           categoryCell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFF0F0F0' } };
+           lastCategoryRow = row;
+           isEventInCategoryAppeared = false;
+         }
+         categoryCell.alignment = { horizontal: 'left', vertical: 'middle' };
+         categoryCell.border = {
+           top: { style: 'thin' },
+           left: { style: 'thin' },
+           bottom: { style: 'thin' },
+           right: { style: 'thin' }
+         };
+         
+         // 이벤트 컬럼
+         var eventCell = worksheet.getCell(row, 2);
+         eventCell.alignment = { horizontal: 'left', vertical: 'middle' };
+         eventCell.border = {
+           top: { style: 'thin' },
+           left: { style: 'thin' },
+           bottom: { style: 'thin' },
+           right: { style: 'thin' }
+         };
+         
+         // 이벤트 행 처리
+         var isSeparatorRow = false;
+         if (eventCell.value && eventCell.value.toString().trim() !== '') {
+           isEventInCategoryAppeared = true;
+           // 첫 번째 이벤트 행 - 높이 2배로 유지, 기본 배경
+           worksheet.getRow(row).height = 30; // 기본 높이 15의 2배 
+         }
+         else
+         {
+            if( !isEventInCategoryAppeared )
+            {
+              // 구분용 행 - 높이 1/3로 축소, 회색 배경
+              worksheet.getRow(row).height = 5; // 기본 높이 15의 1/3
+              eventCell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFD0D0D0' } }; // 회색 배경
+              isSeparatorRow = true;
+              // 구분용 행인 경우 카테고리 셀에도 회색 배경 적용
+              categoryCell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFD0D0D0' } };
+            }
+          }
+         
+         // 일별 컬럼들
+         for (var col = 3; col <= columnCount; col++) {
+           var cell = worksheet.getCell(row, col);
+           
+           // 날짜 데이터에서 월 구분선 확인
+           var dayHeaderCell = worksheet.getCell(2, col);
+           var dayValue = dayHeaderCell.value;
+           var isMonthBoundary = false;
+           
+           // 1일인 경우 월 구분선으로 처리
+           if (dayValue && dayValue.toString() === '1') {
+             isMonthBoundary = true;
+           }
+           
+           // 월 구분선은 1일 셀의 왼쪽만 검은색, 오른쪽은 회색
+           if (isMonthBoundary) {
+             cell.border = {
+               top: { style: 'thin' },
+               left: { style: 'thin' }, // 1일 셀의 왼쪽은 검은색
+               bottom: { style: 'thin' },
+               right: { style: 'thin', color: { argb: 'FFD0D0D0' } } // 1일 셀의 오른쪽은 회색
+             };
+           } else {
+             cell.border = {
+               top: { style: 'thin' },
+               left: { style: 'thin', color: { argb: 'FFD0D0D0' } },
+               bottom: { style: 'thin' },
+               right: { style: 'thin', color: { argb: 'FFD0D0D0' } }
+             };
+           }
+           
+           // 구분용 열의 모든 셀에 회색 배경 적용
+           if (isSeparatorRow) {
+             cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFD0D0D0' } };
+           }
+         }
+       }
+       
+     } catch (error) {
+       console.error('ExcelJS 헤더 스타일 적용 오류:', error);
+     }
+   }
+
+   // PNG 로드맵 이미지 내보내기 함수
+   function exportRoadmapToPng() {
+     console.log('PNG 로드맵 이미지 내보내기 시작');
+     
+     var pngBtn = $('#exportPngBtn');
+     var originalText = pngBtn.html();
+     
+     try {
+       // html2canvas 라이브러리 로드 확인
+       if (typeof html2canvas === 'undefined') {
+         throw new Error('html2canvas 라이브러리가 로드되지 않았습니다. 페이지를 새로고침해주세요.');
+       }
+       
+       // 캡처할 요소 선택
+       var roadmapContainer = $('.roadmap-container');
+       
+       if (roadmapContainer.length === 0) {
+         throw new Error('로드맵 컨테이너를 찾을 수 없습니다.');
+       }
+       
+       // 이벤트가 있는 영역만 캡처하기 위한 계산
+       var timelineElement = roadmapContainer.find('.roadmap-timeline')[0];
+       var timelineBodyElement = roadmapContainer.find('.timeline-body')[0];
+       
+       // 모든 프로젝트 바의 위치를 분석하여 실제 사용 영역 계산
+       var projectBars = roadmapContainer.find('.project-bar');
+       var sidebarWidth = 300;
+       var minLeft = Infinity;
+       var maxRight = -Infinity;
+       
+       console.log('프로젝트 바 개수:', projectBars.length);
+       
+       if (projectBars.length > 0) {
+         projectBars.each(function() {
+           var $bar = $(this);
+           // style 속성에서 직접 left 값 파싱 (더 정확함)
+           var styleLeft = $bar.attr('style') || '';
+           var leftMatch = styleLeft.match(/left:\s*(\d+)px/);
+           var widthMatch = styleLeft.match(/width:\s*(\d+)px/);
+           
+           var barLeft = leftMatch ? parseInt(leftMatch[1]) : 0;
+           var barWidth = widthMatch ? parseInt(widthMatch[1]) : 0;
+           var barRight = barLeft + barWidth;
+           
+           console.log('프로젝트 바:', $bar.find('.project-bar-text').text(), 'left:', barLeft, 'width:', barWidth);
+           
+           minLeft = Math.min(minLeft, barLeft);
+           maxRight = Math.max(maxRight, barRight);
+         });
+         
+         // 여백 추가 (좌우 각각 2주 정도)
+         var marginDays = 14;
+         var marginWidth = marginDays * cellWidth;
+         minLeft = Math.max(0, minLeft - marginWidth);
+         maxRight = maxRight + marginWidth;
+         
+         console.log('이벤트 영역 - 시작:', minLeft, '끝:', maxRight);
+         console.log('셀 너비:', cellWidth, '여백:', marginWidth);
+         
+         // 컨테이너 너비 = 사이드바 + 실제 사용하는 타임라인 영역
+         var containerWidth = sidebarWidth + (maxRight - minLeft);
+         
+       } else {
+         // 이벤트가 없는 경우 기본 6개월 정도만 표시
+         var defaultWidth = 180 * cellWidth; // 약 6개월
+         var containerWidth = sidebarWidth + defaultWidth;
+         minLeft = 0;
+         maxRight = defaultWidth;
+         
+         console.log('이벤트 없음 - 기본 너비 사용:', containerWidth);
+       }
+       
+       var containerHeight = Math.max(
+         roadmapContainer[0].scrollHeight,
+         timelineBodyElement ? timelineBodyElement.scrollHeight : 0
+       );
+       var maxWidth = 16000; // 최대 너비 제한 (DPI 향상으로 인한 증가)
+       var maxHeight = 12000; // 최대 높이 제한 (DPI 향상으로 인한 증가)
+       
+       console.log('원본 크기:', containerWidth + 'x' + containerHeight);
+       
+       // 크기가 너무 큰 경우 스케일 조정
+       var scale = 2.0; // 기본 스케일을 2.0으로 설정 (DPI 향상)
+       
+       if (containerWidth > maxWidth || containerHeight > maxHeight) {
+         var widthScale = maxWidth / containerWidth;
+         var heightScale = maxHeight / containerHeight;
+         scale = Math.min(widthScale, heightScale, 1.5); // 최대 스케일 1.5로 제한 (DPI 고려)
+         
+         console.log('크기 제한으로 인한 스케일 조정:', scale);
+       }
+       
+       // 예상 이미지 크기 계산
+       var finalWidth = Math.floor(containerWidth * scale);
+       var finalHeight = Math.floor(containerHeight * scale);
+       var estimatedPixels = finalWidth * finalHeight;
+       var estimatedMemoryMB = (estimatedPixels * 4) / (1024 * 1024); // RGBA 4바이트 per pixel
+       
+       console.log('예상 최종 크기:', finalWidth + 'x' + finalHeight);
+       console.log('예상 메모리 사용량:', Math.round(estimatedMemoryMB) + 'MB');
+       
+       // 메모리 사용량이 너무 큰 경우 경고
+       if (estimatedMemoryMB > 500) {
+         if (!confirm('이미지 크기가 큽니다 (' + finalWidth + 'x' + finalHeight + ', 약 ' + Math.round(estimatedMemoryMB) + 'MB).\n\n계속 진행하시겠습니까?\n\n• 예: 그대로 진행\n• 아니오: 취소')) {
+           return;
+         }
+       }
+       
+       // 버튼 상태 변경 (로딩 표시)
+       pngBtn.html('<span class="json-btn-icon">⏳</span>생성중...');
+       pngBtn.prop('disabled', true);
+       
+       console.log('로드맵 컨테이너 캡처 시작... (스케일: ' + scale + ')');
+       
+       // 캡처 옵션 설정 (최적화됨)
+       var captureOptions = {
+         useCORS: true,
+         allowTaint: false, // 보안 강화
+         backgroundColor: '#ffffff',
+         scale: scale, // 동적으로 계산된 스케일
+         width: containerWidth,
+         height: containerHeight,
+         scrollX: 0,
+         scrollY: 0,
+         logging: false,
+         removeContainer: true,
+         foreignObjectRendering: false, // 메모리 사용량 감소
+         imageTimeout: 10000, // 타임아웃 단축
+         ignoreElements: function(element) {
+           // 불필요한 요소들 제외 (메모리 절약)
+           if (element.classList && (
+             element.classList.contains('json-controls') ||
+             element.classList.contains('ui-resizable-handle') ||
+             element.classList.contains('ui-draggable-helper')
+           )) {
+             return true;
+           }
+           return false;
+         },
+         onclone: function(clonedDoc) {
+           // 복제된 문서에서 추가 스타일 적용
+           var clonedContainer = clonedDoc.querySelector('.roadmap-container');
+           if (clonedContainer) {
+             // 스크롤바 및 오버플로우 처리
+             clonedContainer.style.overflow = 'visible';
+             clonedContainer.style.height = 'auto';
+             clonedContainer.style.maxHeight = 'none';
+             clonedContainer.style.position = 'static';
+             clonedContainer.style.display = 'flex'; // flex 유지
+             clonedContainer.style.flexDirection = 'row'; // 가로 배치 명시
+             clonedContainer.style.alignItems = 'flex-start'; // 상단 정렬
+             
+             // 사이드바 최적화
+             var sidebar = clonedContainer.querySelector('.roadmap-sidebar');
+             if (sidebar) {
+               sidebar.style.overflow = 'visible';
+               sidebar.style.height = 'auto';
+               sidebar.style.maxHeight = 'none';
+               sidebar.style.display = 'block'; // flex-item으로 유지
+               sidebar.style.width = '300px'; // 고정 너비 유지
+               sidebar.style.minWidth = '300px'; // 최소 너비 설정
+               sidebar.style.flexShrink = '0'; // 축소 방지
+               
+               var sidebarContent = sidebar.querySelector('.sidebar-content');
+               if (sidebarContent) {
+                 sidebarContent.style.overflow = 'visible';
+                 sidebarContent.style.height = 'auto';
+                 sidebarContent.style.maxHeight = 'none';
+               }
+             }
+             
+             // 타임라인 영역 최적화
+             var timeline = clonedContainer.querySelector('.roadmap-timeline');
+             if (timeline) {
+               timeline.style.overflow = 'visible'; // visible로 변경
+               timeline.style.height = 'auto';
+               timeline.style.maxHeight = 'none';
+               timeline.style.display = 'flex'; // flex로 유지
+               timeline.style.flexDirection = 'column'; // 세로 배치
+               timeline.style.flex = '1'; // 남은 공간 차지
+               timeline.style.minWidth = '0'; // flex 축소 허용
+               timeline.style.width = (maxRight - minLeft) + 'px'; // 너비 제한
+               
+               // 타임라인 헤더도 최적화
+               var timelineHeader = timeline.querySelector('.timeline-header');
+               if (timelineHeader) {
+                 timelineHeader.style.overflow = 'visible'; // visible로 변경
+                 timelineHeader.style.width = 'auto';
+                 timelineHeader.style.flexShrink = '0'; // 헤더 축소 방지
+                 
+                 // 헤더 내 월/일 헤더 크롭
+                 var monthHeader = timelineHeader.querySelector('.month-header');
+                 var dayHeader = timelineHeader.querySelector('.day-header');
+                 
+                 if (monthHeader && dayHeader) {
+                   monthHeader.style.transform = 'translateX(-' + minLeft + 'px)';
+                   dayHeader.style.transform = 'translateX(-' + minLeft + 'px)';
+                 }
+               }
+             }
+             
+             // 타임라인 바디 최적화 - 가장 중요한 부분!
+             var timelineBody = clonedContainer.querySelector('.timeline-body');
+             if (timelineBody) {
+               // 스크롤 영역을 완전히 확장
+               timelineBody.style.overflow = 'visible'; // visible로 변경하여 내용이 보이도록
+               timelineBody.style.height = 'auto';
+               timelineBody.style.maxHeight = 'none';
+               timelineBody.style.minHeight = 'auto';
+               
+               // 실제 스크롤 높이로 설정하여 모든 내용이 보이도록 함
+               var originalTimelineBody = document.querySelector('.timeline-body');
+               if (originalTimelineBody) {
+                 var fullHeight = originalTimelineBody.scrollHeight;
+                 timelineBody.style.height = fullHeight + 'px';
+                 console.log('타임라인 바디 높이 설정:', fullHeight + 'px');
+               }
+               
+               // 타임라인 바디 내 모든 요소들 크롭
+               var dateGridLines = timelineBody.querySelector('.date-grid-lines');
+               var todayLine = timelineBody.querySelector('.today-line');
+               var timelineRows = timelineBody.querySelectorAll('.timeline-row');
+               
+               // 날짜 그리드 라인 크롭 - 사이드바 영역 제외
+               if (dateGridLines) {
+                 dateGridLines.style.transform = 'translateX(-' + minLeft + 'px)';
+                 dateGridLines.style.position = 'relative';
+                 dateGridLines.style.overflow = 'visible'; // 세로선이 보이도록
+                 
+                 // 개별 날짜 그리드 라인들 처리
+                 var gridLines = dateGridLines.querySelectorAll('.date-grid-line');
+                 for (var k = 0; k < gridLines.length; k++) {
+                   var line = gridLines[k];
+                   var lineLeft = parseInt(line.style.left) || 0;
+                   // 크롭 범위 내에 있는 라인만 표시
+                   if (lineLeft >= minLeft && lineLeft <= maxRight) {
+                     line.style.display = 'block';
+                   } else {
+                     line.style.display = 'none';
+                   }
+                 }
+               }
+               
+               // 오늘 표시선 크롭
+               if (todayLine) {
+                 var todayLeft = parseInt(todayLine.style.left) || 0;
+                 if (todayLeft >= minLeft && todayLeft <= maxRight) {
+                   todayLine.style.left = (todayLeft - minLeft) + 'px';
+                 } else {
+                   todayLine.style.display = 'none'; // 범위 밖이면 숨김
+                 }
+               }
+               
+               // 모든 타임라인 행 크롭
+               for (var i = 0; i < timelineRows.length; i++) {
+                 var row = timelineRows[i];
+                 row.style.overflow = 'visible'; // 행별 overflow를 visible로 변경
+                 
+                 // 타임라인 그리드 크롭
+                 var timelineGrid = row.querySelector('.timeline-grid');
+                 if (timelineGrid) {
+                   timelineGrid.style.transform = 'translateX(-' + minLeft + 'px)';
+                   timelineGrid.style.position = 'relative';
+                   timelineGrid.style.overflow = 'visible'; // 그리드 visible로 변경
+                 }
+                 
+                 // 프로젝트 바들 위치 조정
+                 var projectBars = row.querySelectorAll('.project-bar');
+                 for (var j = 0; j < projectBars.length; j++) {
+                   var bar = projectBars[j];
+                   // style 속성에서 직접 left 값 파싱
+                   var barStyle = bar.getAttribute('style') || '';
+                   var barLeftMatch = barStyle.match(/left:\s*(\d+)px/);
+                   var barLeft = barLeftMatch ? parseInt(barLeftMatch[1]) : 0;
+                   
+                   // 새로운 위치 계산
+                   var newLeft = barLeft - minLeft;
+                   bar.style.left = newLeft + 'px';
+                   
+                   console.log('프로젝트 바 위치 조정:', barLeft, '->', newLeft);
+                 }
+               }
+             }
+             
+             // JSON 컨트롤 버튼들 숨기기
+             var controls = clonedDoc.querySelector('.json-controls');
+             if (controls) {
+               controls.style.display = 'none';
+             }
+             
+             // 불필요한 애니메이션 제거
+             var allElements = clonedDoc.querySelectorAll('*');
+             for (var i = 0; i < allElements.length; i++) {
+               allElements[i].style.transition = 'none';
+               allElements[i].style.animation = 'none';
+             }
+           }
+           
+           console.log('DOM 복제 및 스타일 적용 완료');
+         }
+       };
+       
+       // html2canvas로 캡처 실행 (비동기 처리)
+       setTimeout(function() {
+         html2canvas(roadmapContainer[0], captureOptions).then(function(canvas) {
+           try {
+             console.log('캔버스 생성 완료, 크기:', canvas.width + 'x' + canvas.height);
+             
+             // 캔버스 크기 검증
+             if (canvas.width === 0 || canvas.height === 0) {
+               throw new Error('생성된 캔버스의 크기가 잘못되었습니다.');
+             }
+             
+             var actualPixels = canvas.width * canvas.height;
+             var actualMemoryMB = (actualPixels * 4) / (1024 * 1024);
+             console.log('실제 메모리 사용량:', Math.round(actualMemoryMB) + 'MB');
+             
+             // Blob 방식으로 안전하게 이미지 생성
+             canvas.toBlob(function(blob) {
+               if (!blob) {
+                 throw new Error('이미지 Blob 생성에 실패했습니다.');
+               }
+               
+               console.log('Blob 생성 완료, 크기:', Math.round(blob.size / 1024) + 'KB');
+               
+               // 파일 다운로드
+               var url = URL.createObjectURL(blob);
+               var downloadLink = document.createElement('a');
+               var now = new Date();
+               var filename = 'roadmap_' + now.getFullYear() + '-' + 
+                             String(now.getMonth() + 1).padStart(2, '0') + '-' + 
+                             String(now.getDate()).padStart(2, '0') + '_' +
+                             String(now.getHours()).padStart(2, '0') + 
+                             String(now.getMinutes()).padStart(2, '0') + '.png';
+               
+               downloadLink.href = url;
+               downloadLink.download = filename;
+               downloadLink.style.display = 'none';
+               
+               // 임시로 DOM에 추가하고 클릭하여 다운로드
+               document.body.appendChild(downloadLink);
+               downloadLink.click();
+               
+               // 정리 작업
+               setTimeout(function() {
+                 document.body.removeChild(downloadLink);
+                 URL.revokeObjectURL(url);
+               }, 100);
+               
+               console.log('PNG 이미지 다운로드 완료:', filename);
+               alert('로드맵이 PNG 이미지로 저장되었습니다!\n\n' +
+                     '파일명: ' + filename + '\n' +
+                     '이미지 크기: ' + canvas.width + ' × ' + canvas.height + ' 픽셀\n' +
+                     '파일 크기: ' + Math.round(blob.size / 1024) + 'KB');
+               
+               // 버튼 상태 복원
+               pngBtn.html(originalText);
+               pngBtn.prop('disabled', false);
+               
+             }, 'image/png', 0.9); // PNG 형식, 품질 90% (메모리 절약)
+             
+           } catch (downloadError) {
+             console.error('PNG 처리 오류:', downloadError);
+             
+             // 대안: toDataURL 방식으로 재시도 (더 작은 해상도)
+             try {
+               console.log('대안 방식으로 재시도...');
+               var smallCanvas = document.createElement('canvas');
+               var ctx = smallCanvas.getContext('2d');
+               
+               // 크기를 절반으로 줄여서 재시도
+               var targetWidth = Math.floor(canvas.width * 0.5);
+               var targetHeight = Math.floor(canvas.height * 0.5);
+               
+               smallCanvas.width = targetWidth;
+               smallCanvas.height = targetHeight;
+               
+               // 이미지 품질 설정
+               ctx.imageSmoothingEnabled = true;
+               ctx.imageSmoothingQuality = 'high';
+               
+               // 축소된 크기로 그리기
+               ctx.drawImage(canvas, 0, 0, targetWidth, targetHeight);
+               
+               // 축소된 이미지를 데이터 URL로 변환
+               var imageDataUrl = smallCanvas.toDataURL('image/png', 0.8);
+               
+               // 다운로드 링크 생성
+               var downloadLink = document.createElement('a');
+               var now = new Date();
+               var filename = 'roadmap_small_' + now.getFullYear() + '-' + 
+                             String(now.getMonth() + 1).padStart(2, '0') + '-' + 
+                             String(now.getDate()).padStart(2, '0') + '.png';
+               
+               downloadLink.href = imageDataUrl;
+               downloadLink.download = filename;
+               downloadLink.style.display = 'none';
+               
+               document.body.appendChild(downloadLink);
+               downloadLink.click();
+               document.body.removeChild(downloadLink);
+               
+               console.log('축소된 PNG 이미지 다운로드 완료:', filename);
+               alert('메모리 절약을 위해 축소된 PNG 이미지가 저장되었습니다!\n\n' +
+                     '파일명: ' + filename + '\n' +
+                     '이미지 크기: ' + targetWidth + ' × ' + targetHeight + ' 픽셀');
+               
+            } catch (fallbackError) {
+               console.error('대안 방식도 실패:', fallbackError);
+               alert('이미지 처리 중 오류가 발생했습니다.\n\n' +
+                     '원인: ' + downloadError.message + '\n\n' +
+                     '해결 방법:\n' +
+                     '• 브라우저 줌을 50% 이하로 줄여보세요\n' +
+                     '• 일부 스케줄을 숨긴 후 다시 시도하세요\n' +
+                     '• 더 작은 기간의 로드맵으로 축소해보세요');
+            }
+             
+             // 버튼 상태 복원
+             pngBtn.html(originalText);
+             pngBtn.prop('disabled', false);
+           }
+           
+         }).catch(function(canvasError) {
+           console.error('캔버스 생성 오류:', canvasError);
+           
+           var errorMessage = '이미지 생성 중 오류가 발생했습니다.\n\n';
+           
+           if (canvasError.message && (canvasError.message.includes('Invalid string length') || 
+                                      canvasError.message.includes('RangeError') ||
+                                      canvasError.message.includes('out of memory'))) {
+             errorMessage += '오류 원인: 메모리 부족 (이미지가 너무 큼)\n\n해결 방법:\n';
+             errorMessage += '• 브라우저 줌을 25-50%로 줄여보세요\n';
+             errorMessage += '• 로드맵을 여러 번에 나누어 스크린샷으로 캡처하세요\n';
+             errorMessage += '• 일부 카테고리나 스케줄을 숨긴 후 다시 시도하세요\n';
+             errorMessage += '• 더 작은 기간(3-6개월)의 로드맵으로 축소해보세요\n';
+             errorMessage += '• Chrome의 시크릿 모드에서 시도해보세요\n';
+             errorMessage += '• 컴퓨터 메모리가 부족한 경우 다른 프로그램을 종료하세요';
+           } else if (canvasError.message && canvasError.message.includes('timeout')) {
+             errorMessage += '오류 원인: 처리 시간 초과\n\n해결 방법:\n';
+             errorMessage += '• 페이지를 새로고침한 후 다시 시도하세요\n';
+             errorMessage += '• 복잡한 스케줄이 많은 경우 일부를 숨긴 후 시도하세요';
+           } else if (canvasError.message && (canvasError.message.includes('tainted') || canvasError.message.includes('CORS'))) {
+             errorMessage += '오류 원인: 외부 리소스 접근 제한\n\n해결 방법:\n';
+             errorMessage += '• 페이지를 새로고침한 후 다시 시도하세요\n';
+             errorMessage += '• 브라우저의 보안 설정을 확인하세요';
+           } else {
+             errorMessage += '오류 세부사항: ' + canvasError.message + '\n\n';
+             errorMessage += '해결 방법:\n';
+             errorMessage += '• 페이지를 새로고침한 후 다시 시도하세요\n';
+             errorMessage += '• 다른 브라우저(Chrome, Firefox)에서 시도해보세요\n';
+             errorMessage += '• 브라우저의 하드웨어 가속을 비활성화해보세요\n';
+             errorMessage += '• 개발자 도구(F12)에서 자세한 오류를 확인하세요';
+           }
+           
+           alert(errorMessage);
+           
+           // 버튼 상태 복원
+           pngBtn.html(originalText);
+           pngBtn.prop('disabled', false);
+         });
+       }, 100); // UI 업데이트 완료 대기
+       
+     } catch (error) {
+       console.error('PNG 내보내기 초기 오류:', error);
+       alert('PNG 이미지 내보내기 초기화 중 오류가 발생했습니다:\n\n' + error.message);
+       
+       // 버튼 상태 복원
+       pngBtn.html(originalText);
+       pngBtn.prop('disabled', false);
+     }
+     
+   }
+
+   // 서버에서 로드맵 데이터 불러오기 함수
+  function loadRoadmapFromServer( name = 'Default' ) {
+    console.log('=== 서버에서 로드맵 데이터 불러오기 시작 ===');
+    
+    $.ajax({
+      url: '<%= load_roadmap_data_project_milestone_index_path(@project) %>',
+      method: 'GET',
+      data: { name: name },
+      success: function(response) {
+        console.log('✅ 서버 로드 성공:', response);
+        
+        if (response.success && response.data) {
+          try {
+            // 서버에서 받은 데이터는 이미 JSON 파일 형식
+            var importData = response.data;
+            
+            // 데이터 유효성 검사
+            if (!importData.categories || !Array.isArray(importData.categories)) {
+              throw new Error('올바르지 않은 JSON 형식입니다.');
+            }
+            
+            importRoadmapFromJSON(importData);
+            
+            console.log('✅ 서버에서 로드맵 데이터 불러오기 완료');          
+            //alert('서버에서 로드맵 데이터를 성공적으로 불러왔습니다.');
+            
+          } catch (error) {
+            console.error('❌ 데이터 처리 오류:', error);
+            alert('서버에서 받은 데이터를 처리하는 중 오류가 발생했습니다: ' + error.message);
+          }
+        } else {
+          console.log('❌ 서버 응답에 데이터가 없음:', response);
+          alert('서버에서 받은 데이터가 유효하지 않습니다.');
+        }
+      },
+      error: function(xhr, status, error) {
+        console.error('❌ 서버 로드 실패:', {
+          status: xhr.status,
+          statusText: xhr.statusText,
+          responseText: xhr.responseText,
+          error: error
+        });
+        alert('서버에서 데이터를 불러오는데 실패했습니다.\n\n상태: ' + xhr.status + '\n오류: ' + error);
+      }
+    });
+  }
+
+   // ============================================================
+   // 서버에 로드맵 데이터 저장 함수 (리팩토링 버전 - 공용 함수 사용)
+   // ============================================================
+   
+   /**
+    * 서버에 로드맵 데이터 저장 함수
+    * 호환성: 기존 JSON 형식 유지 (timeline 미포함)
+    */
+   function saveRoadmapToServer(name = 'Default') {
+     console.log('서버에 로드맵 데이터 저장 시작');
+     
+     // 확인 대화상자
+     if (!confirm('현재 로드맵 데이터를 서버에 저장하시겠습니까?')) {
+       return;
+     }
+     
+     // 버튼 상태 변경 (로딩 표시)
+     var saveBtn = $('#saveJsonBtn');
+     var originalText = saveBtn.html();
+     saveBtn.html('<span class="json-btn-icon">⏳</span>Saving...');
+     saveBtn.prop('disabled', true);
+     
+     // 비동기 처리로 UI 블로킹 방지
+     setTimeout(function() {
+       try {
+         // 공용 함수로 데이터 수집 (timeline 미포함 - 기존 형식 유지)
+         var saveData = collectRoadmapDataAsJSON(name, { includeTimeline: false });
+         
+         // 서버 저장용으로 설명 변경
+         saveData.metadata.description = "Redmine 로드맵 데이터 - 서버 저장";
+         
+         console.log('전송할 데이터:', saveData);
+         
+         // 서버에 AJAX 요청으로 데이터 전송
+         $.ajax({
+           url: '<%= save_roadmap_data_project_milestone_index_path(@project) %>',
+           method: 'POST',
+           headers: {
+             'X-CSRF-Token': $('meta[name="csrf-token"]').attr('content'),
+             'Content-Type': 'application/json'
+           },
+           data: JSON.stringify({
+             roadmap_data: JSON.stringify(saveData),
+             name: name
+           }),
+           success: function(response) {
+             console.log('서버 저장 성공:', response);
+             alert('로드맵 데이터가 서버에 성공적으로 저장되었습니다.');
+             
+             // 버튼 상태 복원
+             saveBtn.html(originalText);
+             saveBtn.prop('disabled', false);
+           },
+           error: function(xhr, status, error) {
+             console.error('서버 저장 실패:', {
+               status: xhr.status,
+               statusText: xhr.statusText,
+               responseText: xhr.responseText,
+               error: error
+             });
+             
+             var errorMessage = '서버 저장에 실패했습니다.\n\n';
+             if (xhr.responseText) {
+               try {
+                 var errorData = JSON.parse(xhr.responseText);
+                 errorMessage += '오류: ' + (errorData.message || errorData.error || '알 수 없는 오류');
+               } catch (e) {
+                 errorMessage += '서버 응답: ' + xhr.responseText.substring(0, 200);
+               }
+             } else {
+               errorMessage += '상태 코드: ' + xhr.status + '\n오류: ' + error;
+             }
+             
+             // 임시 방편: 로컬 스토리지에 저장
+             try {
+               localStorage.setItem('roadmap_backup_' + new Date().getTime(), JSON.stringify(saveData));
+               errorMessage += '\n\n임시로 브라우저 로컬 스토리지에 백업되었습니다.';
+             } catch (e) {
+               // 로컬 스토리지 저장 실패는 무시
+             }
+             
+             alert(errorMessage);
+             
+             // 버튼 상태 복원
+             saveBtn.html(originalText);
+             saveBtn.prop('disabled', false);
+           }
+         });
+         
+       } catch (error) {
+         console.error('데이터 수집 오류:', error);
+         alert('데이터 수집 중 오류가 발생했습니다:\n\n' + error.message);
+         
+         // 버튼 상태 복원
+         saveBtn.html(originalText);
+         saveBtn.prop('disabled', false);
+       }
+     }, 100); // UI 업데이트를 위한 짧은 지연
+   }
+
+   
+</script>

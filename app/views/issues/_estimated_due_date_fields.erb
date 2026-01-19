@@ -1,0 +1,71 @@
+<%=
+  #transfer_request = issue.custom_field_values.find { |value| value.custom_field.name == '이관요청' }
+
+  valid_status_ids = ( IssueStatus.in_progress_ids + IssueStatus.new_ids ).uniq
+  issues = issue.self_and_descendants
+
+  non_issue_trackers_ids = Tracker.sidejob_trackers_ids + Tracker.exception_trackers_ids
+
+  info = RedmineTxMilestoneAutoScheduleHelper::AutoScheduler.analyze_issues_schedule(issues)
+
+  estimated_due_date_html = if !valid_status_ids.include?(issue.status_id) then
+    "-"
+  elsif issue.leaf? && non_issue_trackers_ids.include?( issue.tracker_id ) then
+    "-"
+  elsif issue.estimated_hours.blank? && !non_issue_trackers_ids.include?( issue.tracker_id ) then
+    "<font color='red'>추정시간 미기재</font>".html_safe
+  elsif info[:other_issues].empty? && issue.due_date.present? then
+    "일정이 확정되었습니다.".html_safe
+  elsif info[:no_estimated_hours_issues].empty? && info[:all_issues].any? then
+    # 일감 자동 배치
+    #issue_info = RedmineTxMilestoneAutoScheduleHelper::AutoScheduler.analyze_parent_schedule(issue.id)
+    issue_info = info
+
+    # 자식 일감 중 일정이 확정되지 않은 일감 ID 목록
+    issue_ids = issue.self_and_descendants.select { |issue| issue_info[:other_issues].include?(issue) }.pluck(:id)
+
+    # 자동 재배치 - @issues_info[:all_issues] 사용
+    result_issues = RedmineTxMilestoneAutoScheduleHelper::AutoScheduler.auto_schedule_issues( 
+      issue_info[:all_issues],
+      issue_ids
+    )
+
+    #10.times do pp "!!!!!!!!!!!!!!!!!!!!!!!!!!!!!" end
+
+    #pp result_issues.map { |i| [ i.id, i.due_date ] }
+    #pp issues.map { |i| [ i.id, i.due_date ] }
+
+    # self_and_descendants 트리의 일감 중 추정일정이 세팅된 이슈 객체를 업데이트 해 준다.
+    lookup = result_issues.each_with_object({}) { |r, h| h[r.id] = r }
+    issues = issues.map { |orig| lookup[orig.id] || orig }
+
+    #pp issues.map { |i| [ i.id, i.due_date ] }
+
+    estimated_due_date = issues.map { |i| i.due_date }.compact.max
+    if estimated_due_date.nil?
+      "-"
+    else
+      ( estimated_due_date.strftime('%Y-%m-%d') + "  (" + (
+          link_to( '일정보기', '#', onclick: "showModal('gantt-modal', 1280, '예상 일정'); return false;") +
+          content_tag(:div, id: 'gantt-modal', style: 'display:none;') do
+            content_tag(:h3, '예상 일정', class: 'title') +
+            content_tag(:iframe, '', src: "/predict/issues/#{issue.id}", style: 'border:0; width:100%; height:600px;')
+          end
+        ) + ")" ).html_safe
+    end
+#    issues.pluck(:id)
+    
+  else
+    no_estimated_issues = info[:no_estimated_hours_issues]
+    display_issues = no_estimated_issues.first(5)
+    lines = display_issues.map do |i|
+      ( i.id == issue.id ? "" : "<a class='issue' href='#{issue_path(i)}'>##{i.id}</a> : " ) + "<font color='red'>추정시간 미기재</font>"
+    end
+    lines << "..." if no_estimated_issues.length > 5
+    "#{lines.join('<br>')}".html_safe
+  end
+
+  issue_fields_rows do |rows|
+    rows.right '예상일정', estimated_due_date_html
+  end
+%>

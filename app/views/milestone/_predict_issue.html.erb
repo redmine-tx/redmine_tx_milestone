@@ -1,0 +1,58 @@
+<h3><%= h(@issue.subject) %></h3>
+
+<%
+  # 일감 자동 배치
+  issue_info = RedmineTxMilestoneAutoScheduleHelper::AutoScheduler.analyze_parent_schedule(@issue.id)
+
+  # 자식 일감 중 일정이 확정되지 않은 일감 ID 목록
+  issue_ids = if @issue.leaf? then
+    [ @issue.id ]
+  else
+    @issue.self_and_descendants.select { |issue| issue_info[:other_issues].include?(issue) }.pluck(:id)
+  end
+
+  # 자동 재배치 - @issues_info[:all_issues] 사용
+  result_issues = RedmineTxMilestoneAutoScheduleHelper::AutoScheduler.auto_schedule_issues( 
+    issue_info[:all_issues],
+    issue_ids
+  )
+
+  # self_and_descendants 트리의 일감 중 추정일정이 세팅된 이슈 객체를 업데이트 해 준다.
+  issues = @issue.self_and_descendants.map { |issue| m = result_issues.find { |i| i.id == issue.id }; m ? m : issue }
+
+%>
+<%=render :partial => 'milestone/gantt_chart', locals: { title: '추정 일정', issues: result_issues + issue_info[:fixed_issues], virtual_ids: issue_ids } %>
+
+<div style="margin-top: 8px;">
+  <button id="applyPredictBtn" class="button">적용</button>
+  <span id="applyPredictMsg" style="margin-left:8px;"></span>
+</div>
+
+<script>
+document.addEventListener('DOMContentLoaded', function() {
+  var btn = document.getElementById('applyPredictBtn');
+  if (!btn) return;
+  btn.addEventListener('click', function() {
+    if (!confirm('이대로 일정 확정할까요?')) return;
+    var token = '<%= j(form_authenticity_token) %>';
+    var msg = document.getElementById('applyPredictMsg');
+    if (msg) { msg.textContent = '저장 중...'; }
+    fetch('/predict/issues/<%= @issue.id %>/apply', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'X-CSRF-Token': token
+      },
+      credentials: 'same-origin',
+      body: JSON.stringify({})
+    }).then(function(res) { return res.json(); })
+      .then(function(json) {
+        if (msg) { msg.textContent = ''; }
+        alert(json.message || (json.success ? '저장되었습니다.' : '실패했습니다.'));
+      }).catch(function(err) {
+        if (msg) { msg.textContent = ''; }
+        alert('저장 중 오류가 발생했습니다.');
+      });
+  });
+});
+</script>
