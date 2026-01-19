@@ -26,7 +26,7 @@
 
 <% html_title(selected_version.name.to_s) %>
 
-<div class="tabs" style="height: 48px;">
+<div class="tabs" style="min-width: 100%; height: <%="#{versions.length > 10 ? 72 : 48}px"%>;">
   <ul>
     <% versions.each do |version| %>
       <li><%= link_to version.name.to_s, '/projects/' + params[:project_id].to_s + '/milestone/gantt/versions/' + version.id.to_s, class: ( selected_version && selected_version.id == version.id ) ? 'selected' : '' %></li>

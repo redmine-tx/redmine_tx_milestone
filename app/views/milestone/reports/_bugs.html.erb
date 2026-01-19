@@ -848,4 +848,4 @@ if (fixingBugsCount > 0) {
     columns.delete(:fixed_version)
   end
 %>
-<%= render partial: 'milestone/issue_list', locals: { issues: rest_bug_issues, page_size: 20, columns: columns } %>
+<%= render partial: 'shared/issue_list', locals: { issues: rest_bug_issues, page_size: 20, columns: columns, list_id: 'rest-bugs-list' } %>

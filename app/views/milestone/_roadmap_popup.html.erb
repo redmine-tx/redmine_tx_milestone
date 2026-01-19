@@ -43,44 +43,9 @@
     <div class="schedule-popup-header">
       <span class="schedule-popup-icon">📋</span>
       새 스케줄 추가
-      <div class="schedule-event-info">
-        <span class="schedule-event-name" id="scheduleEventName"></span>
-        <span class="schedule-category-name" id="scheduleCategoryName"></span>
-      </div>
     </div>
     <form class="schedule-form" id="scheduleForm">
-        <div class="form-group">
-        <label class="form-label" for="scheduleName">스케줄 이름</label>
-        <textarea class="form-input" id="scheduleName" placeholder="스케줄 이름을 입력하세요" required rows="3"></textarea>
-        </div>
-      
-      <div class="form-row">
-        <div class="form-group form-group-half">
-          <label class="form-label" for="scheduleStartDate">시작일</label>
-          <input type="date" class="form-input" id="scheduleStartDate" required>
-        </div>
-        <div class="form-group form-group-half">
-          <label class="form-label" for="scheduleEndDate">종료일</label>
-          <input type="date" class="form-input" id="scheduleEndDate" required>
-        </div>
-      </div>
-      
-        <div class="form-group">
-        <label class="form-label">기간 설정 (편의 기능)</label>
-        <div class="duration-buttons">
-          <button type="button" class="duration-btn" data-weeks="1">1주일</button>
-          <button type="button" class="duration-btn" data-weeks="2">2주일</button>
-          <button type="button" class="duration-btn" data-weeks="3">3주일</button>
-          <button type="button" class="duration-btn" data-weeks="4">4주일</button>
-          <button type="button" class="duration-btn" data-weeks="5">5주일</button>
-          <button type="button" class="duration-btn" data-weeks="6">6주일</button>
-        </div>
-      </div>
-      
-      <div class="form-group">
-        <label class="form-label" for="scheduleIssue">이슈</label>
-        <input type="number" class="form-input" id="scheduleIssue" placeholder="이슈 번호를 입력하세요 (선택사항)" min="1">
-      </div>
+      <%= render partial: 'milestone/roadmap_popup_partial', locals: { prefix: 'schedule', show_duration: true, show_color: false } %>
       
       <div class="popup-buttons">
         <button type="button" class="popup-btn popup-btn-secondary" id="cancelScheduleBtn">취소</button>
@@ -117,41 +82,8 @@
       스케줄 편집
     </div>
     
-    <div class="schedule-edit-info">
-      <div class="schedule-edit-event-name" id="scheduleEditEventName"></div>
-      <div class="schedule-edit-category-name" id="scheduleEditCategoryName"></div>
-    </div>
-    
     <form class="schedule-edit-form" id="scheduleEditForm">
-      <div class="form-group">
-        <label class="form-label" for="scheduleEditName">스케줄 이름</label>
-        <textarea class="form-input" id="scheduleEditName" placeholder="스케줄 이름을 입력하세요" required rows="3"></textarea>
-      </div>
-      
-      <div class="form-row">
-        <div class="form-group form-group-half">
-          <label class="form-label" for="scheduleEditStartDate">시작일</label>
-          <input type="date" class="form-input" id="scheduleEditStartDate" required>
-        </div>
-        <div class="form-group form-group-half">
-          <label class="form-label" for="scheduleEditEndDate">종료일</label>
-          <input type="date" class="form-input" id="scheduleEditEndDate" required>
-        </div>
-      </div>
-      
-      <div class="form-group">
-        <label class="form-label" for="scheduleEditIssue">이슈</label>
-        <input type="number" class="form-input" id="scheduleEditIssue" placeholder="이슈 번호를 입력하세요 (선택사항)" min="1">
-      </div>
-      
-      <div class="form-group">
-        <label class="form-label">색상 설정</label>
-        <div class="schedule-color-display">
-          <span id="scheduleColorPreview" class="color-preview" style="background-color: #6c757d;"></span>
-          <button type="button" class="color-select-btn" id="scheduleColorSelectBtn">색상 선택</button>
-          <button type="button" class="reset-color-btn" id="resetScheduleColorBtn" title="카테고리 색상으로 초기화">🔄 초기화</button>
-        </div>
-      </div>
+      <%= render partial: 'milestone/roadmap_popup_partial', locals: { prefix: 'scheduleEdit', show_duration: false, show_color: true } %>
       
       <div class="schedule-edit-buttons">
         <button type="button" class="schedule-edit-btn schedule-cancel-btn" id="scheduleEditCancelBtn">취소</button>

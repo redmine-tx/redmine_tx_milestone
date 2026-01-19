@@ -229,20 +229,71 @@ module RedmineTxMilestoneHelper
                   :get_column_sort_value, :progress_bar, :get_column_value
 
   class RedmineTxMilestoneHook < Redmine::Hook::ViewListener
-    # HTML head에 JS와 CSS 추가
-     def view_issues_show_details_bottom( c={} )
+    # 이슈 페이지 action menu에 로드맵 및 일정요약 링크 추가
+    def view_issues_show_details_bottom(context = {})
+      issue = context[:issue]
+      project = context[:project]
+      view = context[:controller].view_context
+      is_roadmap_tracker = Tracker.is_in_roadmap?(issue.root.tracker_id)
 
-       return unless Tracker.is_in_roadmap?( c[:issue].tracker_id )
+      roadmap_url = "/projects/#{project.identifier}/milestone/gantt/issues/#{issue.root.id}"
+      schedule_url = "/projects/#{project.identifier}/milestone/schedule_summary?issue_ids=#{issue.root.id}"
 
-      link = link_to "로드맵", "/projects/#{c[:project].identifier}/milestone/gantt/issues/#{c[:issue].id}"
-        o = <<EOS
-<script>
-	$(document).ready(function() {
-		$('div.subject h3').append( \" <font size=-1>[#{link.gsub('"', '\"')}]</font>\" ); 
-	});
-</script>
-EOS
-     end
+      # Rails asset pipeline을 사용해서 올바른 아이콘 경로 생성
+      icons_path = view.asset_path('icons.svg')
+
+      <<~HTML.html_safe
+        <script>
+          $(function() {
+            // div.main -> div.content -> div.contextual 구조를 찾아야 함
+            var $ctx = $('div.main div.content div.contextual').first();
+
+            // 더 정확한 선택자로 시도
+            if ($ctx.length === 0) {
+              $ctx = $('#main .content div.contextual').first();
+            }
+
+            // 마지막 fallback: action menu처럼 보이는 contextual div 찾기
+            if ($ctx.length === 0) {
+              $('div.contextual').each(function() {
+                var $this = $(this);
+                var html = $this.html();
+                if (html.indexOf('edit') !== -1 || html.indexOf('시간') !== -1 || html.indexOf('time-add') !== -1 ||
+                    html.indexOf('icon-edit') !== -1 || html.indexOf('icon-time') !== -1 ||
+                    html.indexOf('showAndScrollTo') !== -1 || html.indexOf('btn') !== -1 ||
+                    html.indexOf('sprite_icon') !== -1) {
+                  $ctx = $this;
+                  return false; // break
+                }
+              });
+            }
+
+            if ($ctx.length > 0) {
+              var linksHtml = '';
+
+              // 로드맵 트래커인 경우 로드맵 링크 추가
+              if (#{is_roadmap_tracker} && !$ctx.find('#milestone-roadmap-link').length) {
+                linksHtml += ' <a href="#{roadmap_url}" class="icon icon-projects" title="로드맵 보기" target="_blank">' +
+                             '<svg class="s18 icon-svg" aria-hidden="true"><use href="#{icons_path}#icon--projects"></use></svg>' +
+                             '<span class="icon-label">로드맵</span></a>';
+              }
+
+              // 일정요약 링크 추가 (항상 표시)
+              if (!$ctx.find('#milestone-schedule-link').length) {
+                linksHtml += ' <a href="#{schedule_url}" class="icon icon-stats" title="일정요약 보기" target="_blank">' +
+                             '<svg class="s18 icon-svg" aria-hidden="true"><use href="#{icons_path}#icon--stats"></use></svg>' +
+                             '<span class="icon-label">일정요약</span></a>';
+              }
+
+              // 모든 링크를 한번에 추가
+              if (linksHtml) {
+                $ctx.prepend(linksHtml);
+              }
+            }
+          });
+        </script>
+      HTML
+    end
   end
 
   module VersionPatch

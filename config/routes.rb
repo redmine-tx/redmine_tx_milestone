@@ -3,6 +3,10 @@
 
 get 'milestone/index', to: 'milestone#index'
 
+# predict view for issues (no project prefix)
+get 'predict/issues/:issue_id', to: 'milestone#predict_issue'
+post 'predict/issues/:issue_id/apply', to: 'milestone#apply_predict_issue'
+
 # 프로젝트와 독립적인 issue_detail 라우트 추가
 #get 'issue_detail/:id', to: 'milestone#issue_detail'
 
@@ -13,6 +17,7 @@ resources :projects do
       get 'gantt/versions/:version_id', to: 'milestone#gantt'
       get 'gantt/issues/:issue_id', to: 'milestone#gantt'
       get 'gantt', to: 'milestone#gantt'
+      get 'schedule_summary', to: 'milestone#schedule_summary'
       #get 'validate', to: 'milestone#validate'
       #get 'sync_parent_date', to: 'milestone#sync_parent_date'
       post 'sync_parent_date', to: 'milestone#api_sync_parent_date'

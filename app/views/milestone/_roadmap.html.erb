@@ -166,6 +166,9 @@ today_position = (Date.today - start_date).to_i * cell_width
 <!-- ExcelJS 라이브러리 추가 (색상 지원) -->
 <script src="https://cdnjs.cloudflare.com/ajax/libs/exceljs/4.3.0/exceljs.min.js"></script>
 
+<!-- TX XLSX Exporter (공용 엑셀 익스포터) -->
+<%= javascript_include_tag 'tx_xlsx_exporter', plugin: 'redmine_tx_0_base' %>
+
 <!-- html2canvas 라이브러리 추가 -->
 <script src="https://cdnjs.cloudflare.com/ajax/libs/html2canvas/1.4.1/html2canvas.min.js"></script>
 
@@ -192,7 +195,7 @@ var lastSyncTime = 0;                           // 마지막 동기화 시간
 </script>
 
 <%= render partial: 'milestone/roadmap_lib', locals: { days: days, cell_width: cell_width, start_date: start_date, total_width: total_width } %>
-<%= render partial: 'milestone/roadmap_export', locals: { start_date: start_date, today_position: today_position } %>
+<%= render partial: 'milestone/roadmap_export', locals: { start_date: start_date, end_date: end_date, today_position: today_position } %>
 <%= render partial: 'milestone/roadmap_edit', locals: { days: days, cell_width: cell_width } %>
 
 <script>

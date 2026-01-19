@@ -253,6 +253,11 @@
     background: none;
   }
 
+  /* #content .tabs ul의 min-width 속성 무효화 (전역 스타일) */
+  #content .tabs ul {
+    min-width: auto !important;
+  }
+
   /* task-name 내부의 링크 스타일 */
   .gantt-wrapper .task-name a {
     cursor: pointer !important; /* 클릭 가능하도록 커서 모양 변경 (강제) */

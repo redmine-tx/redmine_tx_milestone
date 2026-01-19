@@ -17,8 +17,9 @@ class MilestoneController < ApplicationController
     # layout false  # 레이아웃 없이 사용하려면
   
     before_action :require_login
-    before_action :find_project, except: [:issue_detail]
-    before_action :authorize, except: [:issue_detail]
+    before_action :find_project, except: [:issue_detail, :predict_issue, :apply_predict_issue]
+    before_action :authorize, except: [:issue_detail, :predict_issue, :apply_predict_issue]
+    before_action :find_issue_for_predict, only: [:predict_issue, :apply_predict_issue]
   
     def index
       # force 파라미터가 있으면 캐시를 클리어합니다
@@ -27,6 +28,58 @@ class MilestoneController < ApplicationController
     end
 
     def gantt
+    end
+
+    def predict_issue
+      render partial: 'milestone/predict_issue', layout: false
+    end
+
+    # 예측 간트 결과를 그대로 저장 (AJAX)
+    def apply_predict_issue
+      begin
+        issue_info = RedmineTxMilestoneAutoScheduleHelper::AutoScheduler.analyze_parent_schedule(@issue.id)
+
+        # 자식 일감 중 일정이 확정되지 않은 일감 ID 목록 (뷰의 로직과 동일)
+        descendant_ids = @issue.descendants.pluck(:id)
+        other_issue_ids = issue_info[:other_issues].map(&:id)
+        issue_ids = descendant_ids & other_issue_ids
+
+        # 자동 재배치
+        result_issues = RedmineTxMilestoneAutoScheduleHelper::AutoScheduler.auto_schedule_issues(
+          issue_info[:all_issues],
+          issue_ids
+        )
+
+        saved_count = 0
+        result_issues.each do |ri|
+          issue = Issue.find(ri.id)
+          issue.start_date = ri.start_date
+          issue.due_date = ri.due_date
+          saved_count += 1 if issue.save
+        end
+
+        # 최상위 부모 일감의 완료일을 자식 중 가장 늦은 날짜로 업데이트
+        top_issue = @issue
+        while top_issue.parent.present?
+          top_issue = top_issue.parent
+        end
+        latest_due_date = top_issue.self_and_descendants.map(&:due_date).compact.max
+        if latest_due_date.present? && (top_issue.due_date.nil? || top_issue.due_date < latest_due_date)
+          top_issue.due_date = latest_due_date
+          top_issue.save
+        end
+
+        render json: {
+          success: true,
+          message: "#{saved_count}개 일감의 일정이 확정되었습니다.",
+          saved_count: saved_count
+        }
+      rescue => e
+        render json: {
+          success: false,
+          message: "일정 저장 중 오류가 발생했습니다: #{e.message}"
+        }, status: :internal_server_error
+      end
     end
 
     def group_detail
@@ -97,49 +150,28 @@ class MilestoneController < ApplicationController
       # assign_from_date : 이 날짜 이후로만 일정 배치 가능하도록 한다. 디폴트는 오늘.
       assign_from_date = params[:assign_from_date] ? Date.parse(params[:assign_from_date]) : Date.today
 
-      # 일정 배치 가능한 상태들
-      valid_status_ids = ( IssueStatus.in_progress_ids + IssueStatus.new_ids ).uniq
-
-      # 일정 배치 가능한 일감 목록 취합      
-      issues =  if params[:user_id].present?
-                  Issue.where( assigned_to_id: params[:user_id] ).where( status_id: valid_status_ids )        
-                elsif params[:parent_issue_id].present?
-
-                  # 부모+자식 일감을 related_issues에 정리
-                  parent_issue = Issue.find( params[:parent_issue_id] )
-                  related_issues = ( [ parent_issue ] + get_all_descendants(parent_issue) ).select { |issue| valid_status_ids.include?( issue.status_id ) }
-
-                  # 관련자들의 기타 일정 확정된 이슈를 모두 얻어온다.
-                  assigned_to_ids = related_issues.map { |issue| issue.assigned_to }.uniq
-                  etc_blocked_issues = Issue.where( assigned_to_id: assigned_to_ids ).where( status_id: valid_status_ids ).where.not( start_date: nil ).where.not( due_date: nil ).order( assigned_to_id: :desc )
-                  etc_blocked_issues = etc_blocked_issues.select { |issue| !related_issues.include?( issue ) }
-                  ( related_issues + etc_blocked_issues ).uniq
-                else
-                  []
-                end
-      
-      # 일감 정보 정리
-      # @issues_info[:fixed_issues] 일정이 확정된 일감
-      # @issues_info[:other_issues] 일정이 확정되지 않은 일감
-      # @issues_info[:candidate_issues] 일정이 확정되지 않은 일감 중 예상 시간이 있는 일감
-      # @issues_info[:no_estimated_hours_issues] 일정이 확정되지 않은 일감 중 예상 시간이 없는 일감
-      @issues_info = Issue.analyze_issues_schedule( issues )
+      # 일감 정보 조회 및 분석 (한 번에 처리)
+      @issues_info = if params[:user_id].present?
+                       RedmineTxMilestoneAutoScheduleHelper::AutoScheduler.analyze_user_schedule(params[:user_id])
+                     elsif params[:parent_issue_id].present?
+                       RedmineTxMilestoneAutoScheduleHelper::AutoScheduler.analyze_parent_schedule(params[:parent_issue_id])
+                     else
+                       { all_issues: [], fixed_issues: [], other_issues: [], candidate_issues: [], no_estimated_hours_issues: [] }
+                     end
 
       # 일정 자동 배치 (저장은 되지 않음)
       if params[:auto_schedule] == 'true' && params[:issue_ids].present?
         
-        # 자동 배치 요청한 이슈들 취합
-        issue_ids = params[:issue_ids].split(',').map(&:to_i)
-        target_issues = issues.select { |issue| issue_ids.include?( issue.id ) }  # target_issues 는 issues 의 객체와 동일한 객체를 참조해야함. 새로운 인스턴스를 만들면 일정 꼬임.
+        # 자동 재배치 - @issues_info[:all_issues] 사용
+        @result_issues = RedmineTxMilestoneAutoScheduleHelper::AutoScheduler.auto_schedule_issues( 
+          @issues_info[:all_issues], 
+          params[:issue_ids].split(',').map(&:to_i), 
+          assign_from_date 
+        )
 
-        # 자동 재배치
-        auto_schedule_issues( issues, target_issues, assign_from_date )
-
-        @result_issues = target_issues
-
-        flash[:notice] = "#{target_issues.count}개 일감의 일정을 아래와 같이 제안 합니다.<br>저장하시려면 위 일정으로 확정 버튼을 클릭해 주세요.".html_safe
+        flash[:notice] = "#{@result_issues.count}개 일감의 일정을 아래와 같이 제안 합니다.<br>저장하시려면 위 일정으로 확정 버튼을 클릭해 주세요.".html_safe
         
-      # 요청된 일감 정보대로 일정을 저장.
+      # 요청된 일감 일정 정보대로 반영
       elsif params[:save_schedule] == 'true' && params[:issue_data].present?
         begin
           issue_data = JSON.parse(params[:issue_data])
@@ -343,6 +375,10 @@ end
   
     private
 
+  def find_issue_for_predict
+    @issue = Issue.visible.find(params[:issue_id])
+  end
+
   # 공통으로 사용되는 기본 데이터
   def get_base_data
     categories = IssueCategory.where(project_id: @project.id).pluck(:id, :name).to_h
@@ -396,8 +432,17 @@ end
     issues_by_days = []
     
     (0..11).each do |day|
-      created_issues = issues.select { |issue| issue.created_on.present? && issue.created_on >= today - day.days && issue.created_on <= today - (day - 1).days }
-      completed_issues = issues.select { |issue| issue.end_time.present? && issue.end_time >= today - day.days && issue.end_time <= today - (day - 1).days }
+      # 기준 날짜 (N일 전)
+      day_date = today - day.days
+
+      # 각 이슈가 해당 "하루"에 한 번만 집계되도록 to_date로 비교
+      created_issues = issues.select do |issue|
+        issue.created_on.present? && issue.created_on.to_date == day_date
+      end
+
+      completed_issues = issues.select do |issue|
+        issue.end_time.present? && issue.end_time.to_date == day_date
+      end
       
       issues_by_category = {}
       
@@ -425,8 +470,13 @@ end
       end
       
       if include_bugs && bug_issues
-        created_bug_issues = bug_issues.select { |issue| issue.created_on.present? && issue.created_on >= today - day.days && issue.created_on <= today - (day - 1).days }
-        completed_bug_issues = bug_issues.select { |issue| issue.end_time.present? && issue.end_time >= today - day.days && issue.end_time <= today - (day - 1).days }
+        created_bug_issues = bug_issues.select do |issue|
+          issue.created_on.present? && issue.created_on.to_date == day_date
+        end
+
+        completed_bug_issues = bug_issues.select do |issue|
+          issue.end_time.present? && issue.end_time.to_date == day_date
+        end
         
         issues_by_category['BUG'] ||= { all: 0, created: 0, completed: 0 }
         issues_by_category['BUG'][:created] += created_bug_issues.size
@@ -441,7 +491,7 @@ end
       total_all_issues = all_issues ? all_issues.size : issues.size
       
       issues_by_days.push({
-        day: Date.today - day.days,
+        day: today - day.days,
         all: total_all_issues,
         created: created_issues.size,
         completed: completed_issues.size,
@@ -560,15 +610,24 @@ end
   def process_bugs_data(today, version_id)
     base_data = get_base_data
     bug_data = get_bug_data(base_data, version_id)
-    
+
+    if version_id.present? && Version.find(version_id).effective_date.present?
+      today = [today, Version.find(version_id).effective_date + 2.day].min
+    end
+
     # 버그 통계용 데이터 (일반 일감 제외)
     issues_by_days = calculate_daily_stats(today, [], bug_data[:bug_issues], base_data[:categories], nil, bug_data[:all_bug_issues], include_bugs: true)
+    # today 시점 기준으로 BUG 잔여 개수를 다시 계산
+    bugs_until_today = bug_data[:all_bug_issues].where('created_on <= ?', today.end_of_day)
+    bugs_completed_until_today = bugs_until_today.where.not(end_time: nil)
+                                                 .where('end_time <= ?', today.end_of_day)
+
     rest_issue_count_per_category = calculate_rest_issue_counts(
-      Issue.none, 
-      Issue.none, 
-      bug_data[:all_bug_issues], 
-      bug_data[:all_bug_completed_issues], 
-      base_data[:categories], 
+      Issue.none,
+      Issue.none,
+      bugs_until_today,
+      bugs_completed_until_today,
+      base_data[:categories],
       include_bugs: true
     )
     
@@ -602,15 +661,6 @@ end
     [issues_by_days, rest_issue_count_per_category, rest_bug_issues, rest_bug_count_per_category, all_bug_issues, Time.current]
   end
 
-    def get_all_descendants(issue)
-      descendants = []
-      issue.children.each do |child|
-        descendants << child
-        descendants.concat(get_all_descendants(child))
-      end
-      descendants
-    end
-
     def find_project
       @user = params[:user_id] ? User.find(params[:user_id]) : User.current
       @project = Project.find(params[:project_id])
@@ -621,71 +671,6 @@ end
     def authorize
       raise Unauthorized unless User.current.allowed_to?(:view_milestone, @project)
     end
-
-     
-
-    def auto_schedule_issues( all_issues, target_issues, assign_from_date = Date.today )
-
-      # 이미 일정이 배치된 날짜들 정보를 정리해 둔다
-      all_blocked_dates = Issue.blocked_dates_map_per_assignee( all_issues )
-
-      # 1. priority가 큰 순서부터 정렬 (priority_id가 클수록 높은 우선순위)
-      priority_sorted_issues = target_issues.sort_by do |issue|
-        [
-          ( issue.fixed_version&.effective_date || assign_from_date + 10.years ),
-          -(issue.priority_id || 0),
-          issue.id
-        ]
-      end
-
-      # 2. 상호간 선행 일감 관계를 고려한 위상 정렬
-      # 위상 정렬은 선/후행 관계를 올바르게 처리할 수 있는 알고리즘입니다
-      sorted_issues = Issue.topological_sort(priority_sorted_issues)
-      Rails.logger.info "[RedmineTxMilestone] sorted_issues: #{sorted_issues.map { |issue| issue.id }}"
-
-      assigned_to_ids = target_issues.map { |issue| issue.assigned_to_id }.uniq
-      
-      assigned_dates = {} # 이미 배치된 일감들의 날짜를 추적
-      assigned_to_ids.each do |assigned_to_id|
-        assigned_dates[assigned_to_id] = {}
-      end
-      
-      sorted_issues.each do |issue|
-        next unless issue.estimated_hours.present?
-
-        #puts "issue.id: #{issue.id}"
-        
-        # 추정작업시간을 일수로 변환 (8시간 = 1일)
-        work_days = (issue.estimated_hours / 8.0).ceil
-        
-        # 선행 일감들의 완료일을 고려하여 시작 가능한 날짜 계산
-        search_start_date = assign_from_date
-        latest_predecessor_end_date = issue.latest_predecessor_end_date( all_issues )
-        
-        if latest_predecessor_end_date.present?          
-          search_start_date = [search_start_date, latest_predecessor_end_date + 1.day].max
-          #puts "  - latest_predecessor_end_date: #{latest_predecessor_end_date} search_start_date: #{search_start_date}"
-        end
-
-        start_date = Issue.find_available_start_date(search_start_date, work_days, all_blocked_dates[issue.assigned_to_id], assigned_dates[issue.assigned_to_id], issue.estimated_hours)
-        due_date = Issue.calculate_due_date(start_date, work_days)
-
-        #puts "\e[31missue.id: #{issue.id} search_start_date: #{search_start_date} latest_predecessor_end_date: #{latest_predecessor_end_date} start_date: #{start_date} due_date: #{due_date}\e[0m"
-        
-        # 일감 업데이트
-        issue.start_date = start_date
-        issue.due_date = due_date
-
-        # 사용된 날짜 범위를 기록
-        if issue.estimated_hours.to_f < 8.0 then
-          assigned_dates[issue.assigned_to_id][start_date] = assigned_dates[issue.assigned_to_id][start_date].to_f + issue.estimated_hours.to_f
-        else
-          (start_date..due_date).each { |date| assigned_dates[issue.assigned_to_id][date] = assigned_dates[issue.assigned_to_id][date].to_f + 8.0 }
-        end
-      end
-    end
-
-
 
     def group_infos
       groups = {}
@@ -700,7 +685,7 @@ end
 
       all_groups.each do |group|
         # @users의 순서를 유지하면서 해당 그룹의 사용자만 필터링
-        groups[ group ] = { user_infos: all_users.filter_map { |user| { user: user, issue_info: Issue.analyze_issues_schedule( Issue.where( assigned_to_id: user.id ).where( status_id: ( IssueStatus.in_progress_ids + IssueStatus.new_ids ).uniq ) ) } if group.users.map(&:id).include?(user.id) } }
+        groups[ group ] = { user_infos: all_users.filter_map { |user| { user: user, issue_info: RedmineTxMilestoneAutoScheduleHelper::AutoScheduler.analyze_user_schedule( user.id ) } if group.users.map(&:id).include?(user.id) } }
       end
 
       groups

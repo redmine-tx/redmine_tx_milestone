@@ -1,4 +1,9 @@
 module RedmineTxMilestoneAutoScheduleHelper
+
+  class Hooks < Redmine::Hook::ViewListener
+    render_on :view_issues_show_details_bottom, partial: 'issues/estimated_due_date_fields'
+  end
+
     module IssueRelationPatch
 
         # 제대로 동작하지 않는 레드마인 기본 기능 제거.
@@ -18,10 +23,165 @@ module RedmineTxMilestoneAutoScheduleHelper
         end
     end
 
-    module IssuePatch
-        extend ActiveSupport::Concern
-    
-        module ClassMethods
+    # 이슈 자동 스케줄링 유틸리티
+    class AutoScheduler
+        
+        # === PUBLIC API ===
+        
+        # 사용자별 일정 정보 분석
+        # @param user_id [Integer] 사용자 ID
+        # @return [Hash] 일감 정보 해시
+        #   - :all_issues - 모든 유효한 일감
+        #   - :fixed_issues - 일정이 확정된 일감
+        #   - :other_issues - 일정이 확정되지 않은 일감
+        #   - :candidate_issues - 예상 시간이 있는 일감
+        #   - :no_estimated_hours_issues - 예상 시간이 없는 일감
+        def self.analyze_user_schedule(user_id)
+          valid_status_ids = ( IssueStatus.in_progress_ids + IssueStatus.new_ids ).uniq
+          issues = Issue.where( assigned_to_id: user_id ).where( status_id: valid_status_ids )
+          analyze_issues_schedule(issues)
+        end
+
+        # 부모 일감 기준 관련 일감 일정 정보 분석
+        # 부모+자식 일감과 관련 담당자들의 일정 확정된 이슈를 포함
+        # @param parent_issue_id [Integer] 부모 일감 ID
+        # @return [Hash] 일감 정보 해시
+        #   - :all_issues - 모든 유효한 일감
+        #   - :fixed_issues - 일정이 확정된 일감
+        #   - :other_issues - 일정이 확정되지 않은 일감
+        #   - :candidate_issues - 예상 시간이 있는 일감
+        #   - :no_estimated_hours_issues - 예상 시간이 없는 일감
+        def self.analyze_parent_schedule(parent_issue_id)
+          valid_status_ids = ( IssueStatus.in_progress_ids + IssueStatus.new_ids ).uniq
+          
+          # 부모+자식 일감을 related_issues에 정리
+          parent_issue = Issue.find( parent_issue_id )
+          related_issues = parent_issue.self_and_descendants.where(status_id: valid_status_ids).to_a
+
+          # 관련자들의 기타 일정 확정된 이슈를 모두 얻어온다.
+          assigned_to_ids = related_issues.map { |issue| issue.assigned_to }.uniq
+          etc_blocked_issues = Issue.where( assigned_to_id: assigned_to_ids )
+                                    .where( status_id: valid_status_ids )
+                                    .where.not( start_date: nil )
+                                    .where.not( due_date: nil )
+                                    .order( assigned_to_id: :desc )
+          etc_blocked_issues = etc_blocked_issues.select { |issue| !related_issues.include?( issue ) }
+          
+          issues = ( related_issues + etc_blocked_issues ).uniq
+          analyze_issues_schedule(issues)
+        end
+        
+        # 일정 자동 배치
+        # @param all_issues [Array<Issue>] 전체 일감 목록
+        # @param issue_ids [Array<Integer>] 배치할 일감 ID 목록
+        # @param assign_from_date [Date] 배치 시작 날짜 (기본값: 오늘)
+        # @return [Array<Issue>] 일정이 배치된 일감 목록
+        def self.auto_schedule_issues(all_issues, issue_ids, assign_from_date = Date.today)
+          target_issues = all_issues.select { |issue| issue_ids.include?(issue.id) }
+
+          # 이미 일정이 배치된 날짜들 정보를 정리해 둔다
+          all_blocked_dates = blocked_dates_map_per_assignee(all_issues)
+
+          #pp [ 'all_blocked_dates', all_blocked_dates ]
+
+          # 1. priority가 큰 순서부터 정렬 (priority_id가 클수록 높은 우선순위)
+          priority_sorted_issues = target_issues.sort_by do |issue|
+            [
+              (issue.fixed_version&.effective_date || assign_from_date + 10.years),
+              -(issue.priority_id || 0),
+              issue.id
+            ]
+          end
+
+          # 2. 상호간 선행 일감 관계를 고려한 위상 정렬
+          sorted_issues = topological_sort(priority_sorted_issues)
+          Rails.logger.info "[RedmineTxMilestone] sorted_issues: #{sorted_issues.map(&:id)}"
+
+          assigned_to_ids = target_issues.map(&:assigned_to_id).uniq
+          
+          assigned_dates = {} # 이미 배치된 일감들의 날짜를 추적
+          assigned_to_ids.each do |assigned_to_id|
+            assigned_dates[assigned_to_id] = {}
+          end
+          
+          sorted_issues.each do |issue|
+            next unless issue.estimated_hours.present?
+            
+            # 추정작업시간을 일수로 변환 (8시간 = 1일)
+            work_days = (issue.estimated_hours / 8.0).ceil
+            
+            # 선행 일감들의 완료일을 고려하여 시작 가능한 날짜 계산
+            search_start_date = assign_from_date
+            latest_predecessor_end_date = issue.latest_predecessor_end_date(all_issues)
+
+            if latest_predecessor_end_date.present?          
+              search_start_date = [search_start_date, latest_predecessor_end_date + 1.day].max
+            end
+
+            start_date = find_available_start_date(
+              search_start_date, 
+              work_days, 
+              all_blocked_dates[issue.assigned_to_id], 
+              assigned_dates[issue.assigned_to_id], 
+              issue.estimated_hours
+            )
+            due_date = calculate_due_date(start_date, work_days)
+
+            #pp [ 'start_date', issue.id, search_start_date.strftime('%Y-%m-%d'), work_days, all_blocked_dates[issue.assigned_to_id], assigned_dates[issue.assigned_to_id], issue.estimated_hours, start_date.strftime('%Y-%m-%d') ]
+            
+            # 일감 업데이트
+            issue.start_date = start_date
+            issue.due_date = due_date
+
+            # 사용된 날짜 범위를 기록
+            if issue.estimated_hours.to_f < 8.0
+              assigned_dates[issue.assigned_to_id][start_date] = 
+                assigned_dates[issue.assigned_to_id][start_date].to_f + issue.estimated_hours.to_f
+            else
+              (start_date..due_date).each do |date| 
+                assigned_dates[issue.assigned_to_id][date] = 
+                  assigned_dates[issue.assigned_to_id][date].to_f + 8.0
+              end
+            end
+          end
+
+          target_issues
+        end
+
+        # 일감 정보 정리 (내부용)
+        # @param issues [Array<Issue>] 이슈 목록
+        # @return [Hash] 일감 정보 해시
+        #   - :all_issues - 모든 유효한 일감
+        #   - :fixed_issues - 일정이 확정된 일감
+        #   - :other_issues - 일정이 확정되지 않은 일감
+        #   - :candidate_issues - 예상 시간이 있는 일감
+        #   - :no_estimated_hours_issues - 예상 시간이 없는 일감
+        def self.analyze_issues_schedule(issues)
+          info = {}
+          exception_tracker_ids = ( Tracker.sidejob_trackers_ids + Tracker.bug_trackers_ids + Tracker.exception_trackers_ids + Tracker.roadmap_trackers_ids ).uniq
+      
+          info[:all_issues] = issues.select{ |i| !exception_tracker_ids.include?( i.tracker_id ) && ( IssueStatus.in_progress_ids + IssueStatus.new_ids ).uniq.include?( i.status_id ) }
+          
+          # 일정이 확정된 일감
+          info[:fixed_issues] = info[:all_issues].select { |issue| issue.is_in_progress? || (issue.start_date.present? && issue.due_date.present? ) }
+      
+          # 일정이 확정되지 않은 일감
+          info[:other_issues] = ( info[:all_issues] - info[:fixed_issues] )
+      
+          # 일정이 확정되지 않은 일감 중 예상 시간이 있는 일감
+          info[:candidate_issues] = info[:other_issues].select { |issue| issue.estimated_hours.present? }
+      
+          info[:no_estimated_hours_issues] = info[:other_issues].select { |issue| !issue.estimated_hours.present? }
+      
+          info
+        end
+
+        # === PRIVATE IMPLEMENTATION ===
+        
+        class << self
+          private
+          
+
           # 이슈 관계를 기반으로 위상정렬 수행
           # blocks/precedes 관계와 follows/blocked 관계를 모두 고려
           def topological_sort(issues)
@@ -112,47 +272,16 @@ module RedmineTxMilestoneAutoScheduleHelper
             remaining = issues - result
             result + remaining
           end
-    
-          # 일감 정보 정리
-          # @issues_info[:fixed_issues] 일정이 확정된 일감
-          # @issues_info[:other_issues] 일정이 확정되지 않은 일감
-          # @issues_info[:candidate_issues] 일정이 확정되지 않은 일감 중 예상 시간이 있는 일감
-          # @issues_info[:no_estimated_hours_issues] 일정이 확정되지 않은 일감 중 예상 시간이 없는 일감
-          def analyze_issues_schedule( issues )
-    
-            info = {}
-            exception_tracker_ids = ( Tracker.sidejob_trackers_ids + Tracker.bug_trackers_ids + Tracker.exception_trackers_ids + Tracker.roadmap_trackers_ids ).uniq
-        
-            info[:all_issues] = issues.select{ |i| !exception_tracker_ids.include?( i.tracker_id ) && ( IssueStatus.in_progress_ids + IssueStatus.new_ids ).uniq.include?( i.status_id ) }
-            
-            # 일정이 확정된 일감
-            info[:fixed_issues] = info[:all_issues].select { |issue| issue.is_in_progress? || (issue.start_date.present? && issue.due_date.present? ) }
-        
-            # 일정이 확정되지 않은 일감
-            info[:other_issues] = ( info[:all_issues] - info[:fixed_issues] )
-        
-            # 일정이 확정되지 않은 일감 중 예상 시간이 있는 일감
-            info[:candidate_issues] = info[:other_issues].select { |issue| issue.estimated_hours.present? }
-        
-            info[:no_estimated_hours_issues] = info[:other_issues].select { |issue| !issue.estimated_hours.present? }
-        
-            info
-          end
 
           # 일정 박힌 이슈들을 취합하여 담당자별 일간 할당 시간 정보를 리턴
-          # 예제 :
-          # {
-          #   1 => {
-          #     2025-01-01 => 8,
-          #     2025-01-02 => 4
-          #   },
-          #   2 => {
-          #     2025-01-03 => 8,
-          #     2025-01-04 => 8,
-          #     2025-01-05 => 8
+          # @param issues [Array<Issue>] 이슈 목록
+          # @return [Hash] 담당자별 일간 할당 시간 맵
+          # @example
+          #   {
+          #     1 => { Date.new(2025,1,1) => 8, Date.new(2025,1,2) => 4 },
+          #     2 => { Date.new(2025,1,3) => 8, Date.new(2025,1,4) => 8 }
           #   }
-          # }
-          def blocked_dates_map_per_assignee( issues )
+          def blocked_dates_map_per_assignee(issues)
 
             # 일정 박힌 이슈들
             fixed_issues = issues.select { |issue| ( issue.is_in_progress? && issue.due_date.present? ) || (issue.start_date.present? && issue.due_date.present? ) }
@@ -160,7 +289,7 @@ module RedmineTxMilestoneAutoScheduleHelper
             # 일정 박힌 이슈들 날짜 정리
             date_ranges = fixed_issues.filter_map { |issue| 
               next unless issue.due_date.present?
-              start_date = [ Date.today, issue.start_date ].compact.min
+              start_date = [ Date.today, issue.start_date ].compact.max
               { assigned_to_id: issue.assigned_to_id, range: start_date..issue.due_date, estimated_hours: issue.estimated_hours }
             }.sort_by{ |info| info[:range].begin }
 
@@ -253,22 +382,22 @@ module RedmineTxMilestoneAutoScheduleHelper
             
             current_date
           end
-      
+
           # 일정 중첩 여부 확인
           def date_range_overlaps?(start_date, due_date, blocked_dates, assigned_dates, estimated_hours)
             day_estimated_hours = [8.0, estimated_hours.to_f].min
             (start_date..due_date).any? { |date| 
-              #blocked_dates.include?(date) || assigned_dates.include?(date) || half_opened_dates.include?(date)
               blocked_dates[date].to_f + assigned_dates[date].to_f + day_estimated_hours.to_f > 8.0
             } 
           end
-    
-    
         end
-    
-    
-    
-    
+    end
+
+    # Issue 인스턴스에 필요한 메서드들만 패치
+    module IssuePatch
+        extend ActiveSupport::Concern
+
+        # 날짜 기반 예상 시간 계산
         def date_based_estimated_hours
           return estimated_hours if estimated_hours.present?
     
@@ -279,16 +408,19 @@ module RedmineTxMilestoneAutoScheduleHelper
           end
         end
     
+        # 차단 관계 확인
         def is_blocking?( issue )
           return true if self.relations.select { |r| ( r.relation_type == 'blocks' || r.relation_type == 'precedes' ) && r.issue_to_id == issue.id && r.issue_from_id == self.id }.any?
           return true if follow_issues.any? { |issue| self.is_blocking?(issue) }
           false
         end
 
+        # 후행 일감 목록
         def follow_issues
           self.relations.select { |r| ( r.relation_type == 'blocks' || r.relation_type == 'precedes' ) && r.issue_from_id == self.id && r.issue_to_id != nil }.map { |r| r.issue_to }
         end
 
+        # 후행 일감들의 예상 시간 합계
         def follow_issues_estimated_hours
           follow_issues = self.relations.select { |r| ( r.relation_type == 'blocks' && r.issue_from_id == self.id ) || ( r.relation_type == 'precedes' && r.issue_from_id == self.id ) }
           follow_issues.map { |r| r.issue_to.date_based_estimated_hours }.sum
@@ -308,6 +440,9 @@ module RedmineTxMilestoneAutoScheduleHelper
         end
 =end    
     
+        # 선행 일감들의 가장 늦은 완료일
+        # @param issues_cache [Array<Issue>] 캐시된 이슈 목록 (성능 최적화용)
+        # @return [Date, nil] 선행 일감들 중 가장 늦은 완료일
         def latest_predecessor_end_date( issues_cache = nil )
 
           # 선행 일감들 찾기 (이 일감을 후행하는 관계들)
@@ -343,9 +478,8 @@ module RedmineTxMilestoneAutoScheduleHelper
         end
     
         
-    
-    
-        # 레드마인 기본 working_duration 은 estimated_hours 를 깡그리 무시한다. 그래서 오버라이드 해준다.
+        # 레드마인 기본 working_duration은 estimated_hours를 무시하므로 오버라이드
+        # @return [Integer] 작업 소요 일수
         def working_duration
           if self.estimated_hours.present?
             (estimated_hours / 8.0).ceil
@@ -353,5 +487,5 @@ module RedmineTxMilestoneAutoScheduleHelper
             super()
           end
         end
-      end
+    end
 end

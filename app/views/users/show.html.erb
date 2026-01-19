@@ -38,7 +38,7 @@
 
 <h3><%= l(:label_assigned_issues) %> (<%= assigned_issues.size %>)</h3>
 
-<%= render partial: 'milestone/issue_list', locals: { issues: assigned_issues, columns: [:id, :tracker, :priority, :subject, :status, :fixed_version, :done_ratio, :updated_on, :due_date, :tip] } %>
+<%= render partial: 'shared/issue_list', locals: { issues: assigned_issues, columns: [:id, :tracker, :priority, :subject, :status, :fixed_version, :done_ratio, :updated_on, :due_date, :tip], list_id: 'user-assigned-issues' } %>
 
 <br>
 
