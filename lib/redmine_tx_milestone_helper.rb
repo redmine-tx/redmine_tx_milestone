@@ -1,4 +1,6 @@
 module RedmineTxMilestoneHelper
+  # TxBaseHelper의 일감 테이블 헬퍼 메서드 사용
+  include TxBaseHelper
 
   # 버전별 색상 코드 반환 메소드
   # effective_date 기준으로 남은 기간에 따라 다른 색상 반환
@@ -183,50 +185,8 @@ module RedmineTxMilestoneHelper
     link_to count, full_url, target: '_blank'
   end
 
-  # 이슈 테이블 관련 헬퍼 메서드들
-  def get_column_sort_value(issue, column)
-    case column
-    when :project then issue.project.name
-    when :tracker then issue.tracker.name
-    when :status then issue.status.position
-    when :priority then issue.priority.position
-    when :fixed_version then issue.fixed_version_sort_value
-    else
-      issue.send(column)
-    end
-  end
-
-  def progress_bar(done_ratio)
-    if done_ratio == 0
-      "<table class='progress' style='width: 80px;'><tr><td class='todo' style='width: 100%;'></td></tr></table>".html_safe
-    elsif done_ratio == 100
-      "<table class='progress' style='width: 80px;'><tr><td class='closed' style='width: 100%;'></td></tr></table>".html_safe
-    else
-      "<table class='progress' style='width: 80px;'><tr><td class='closed' style='width: #{done_ratio}%;'></td><td class='todo' style='width: #{100 - done_ratio}%;'></td></tr></table>".html_safe
-    end
-  end
-
-  def get_column_value(issue, column)
-    case column
-    when :project then link_to_project(issue.project)
-    when :subject then link_to( issue.subject, issue_path(issue), class: issue.css_classes, title: issue.subject )
-    when :fixed_version then issue.fixed_version_plus
-    when :done_ratio then progress_bar(issue.done_ratio)
-    when :updated_on then format_time(issue.updated_on)
-    when :start_date then format_date(issue.start_date)
-    when :due_date then format_date(issue.due_date)
-    when :tip then "<font color='red'>#{issue.tip}</font>".html_safe
-    when :assigned_to then issue.assigned_to_id ? link_to_principal(issue.assigned_to) : ''
-    when :estimated_hours then issue.estimated_hours_plus
-    when :worker then issue.worker_id ? link_to_principal(issue.worker) : ''
-    else
-      issue.send(column)
-    end
-  end
-
   module_function :get_version_color, :build_issue_query, :render_issues, 
-                  :build_bug_issues_filter_params, :link_to_issue_with_id, :link_to_bug_issues_count,
-                  :get_column_sort_value, :progress_bar, :get_column_value
+                  :build_bug_issues_filter_params, :link_to_issue_with_id, :link_to_bug_issues_count
 
   class RedmineTxMilestoneHook < Redmine::Hook::ViewListener
     # 이슈 페이지 action menu에 로드맵 및 일정요약 링크 추가

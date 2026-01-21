@@ -11,6 +11,9 @@
   <%= javascript_include_tag 'tx_timeline_grid', plugin: 'redmine_tx_0_base' %>
   <%= stylesheet_link_tag 'tx_timeline_grid', plugin: 'redmine_tx_0_base' %>
   
+  <!-- TX Issue Autocomplete (일감 자동완성) -->
+  <%= javascript_include_tag 'tx_issue_autocomplete', plugin: 'redmine_tx_0_base' %>
+  
   <style>
     .schedule-summary-form {
       background: #f9f9f9;
@@ -240,17 +243,23 @@ all_groups = Group.all.reject { |group| excluded_group_ids.include?(group.id) }
   
   # 결과 데이터 구성: 그룹 -> 사용자 -> 일감들
   result_data = {}
+  registered_user_ids = Set.new  # 이미 등록된 사용자 ID 추적
+  
   groups_to_show.each do |group|
     group_users_issues = {}
     group_user_ids = group_user_mapping[group]
     
     group_user_ids.each do |user_id|
+      next if registered_user_ids.include?(user_id)  # 이미 등록된 사용자는 skip
       next unless issues_by_user[user_id]
       user = users[user_id]
       next unless user
       
       user_issues = issues_by_user[user_id].sort_by(&:start_date)
-      group_users_issues[user] = user_issues if user_issues.any?
+      if user_issues.any?
+        group_users_issues[user] = user_issues
+        registered_user_ids.add(user_id)  # 등록된 사용자 ID 기록
+      end
     end
     
     result_data[group] = group_users_issues if group_users_issues.any?
@@ -782,32 +791,16 @@ $(document).ready(function() {
 </div>
 
 <%= javascript_tag do %>
-  // 일감 ID 다중 자동완성 (번호/제목 검색)
-  var issueIdSplitter = /[,;\s]+/;
-  multipleAutocompleteField(
+  // 일감 ID 다중 자동완성 (번호/제목 검색) - 공통 함수 사용
+  setupIssueAutocomplete(
     'issue_ids',
     '<%= j tx_base_top_parent_issues_path %>',
     {
-      source: function(request, response) {
-        var term = request.term.split(issueIdSplitter).pop();
-        if (!term) { response([]); return; }
-
-        var data = { term: term };
-        <% if @project.present? %>
-        data['project_id'] = '<%= @project.id %>';
-        <% else %>
-        data['scope'] = 'all';
-        <% end %>
-
-        $.getJSON('<%= j tx_base_top_parent_issues_path %>', data, response);
-      },
-      select: function(event, ui) {
-        var terms = this.value.split(issueIdSplitter).filter(function(v){ return v.length > 0; });
-        terms.pop(); // 기존 입력 토큰 제거
-        terms.push(String(ui.item.value)); // 선택한 일감 ID만 추가
-        this.value = terms.join(", ") + ", ";
-        return false;
-      }
+      <% if @project.present? %>
+      projectId: '<%= @project.id %>',
+      <% else %>
+      scope: 'all',
+      <% end %>
     }
   );
 <% end %>
