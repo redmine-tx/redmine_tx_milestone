@@ -26,6 +26,8 @@
                       .where.not(issues: { status_id: IssueStatus.discarded_ids })
                       .where.not('child_issues.status_id': IssueStatus.completed_ids )
                       .where.not('child_issues.status_id': IssueStatus.discarded_ids )
+                      .where.not(issues: { tracker_id: Tracker.exception_trackers_ids })
+                      .where.not('child_issues.tracker_id': Tracker.exception_trackers_ids )
                       .distinct
   all_issues = parent_issues.map { |issue| [ issue, issue.children ] }.flatten
   
