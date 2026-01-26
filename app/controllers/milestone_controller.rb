@@ -135,7 +135,7 @@ class MilestoneController < ApplicationController
         @all_roadmaps = build_roadmap_response_data(@roadmap_data, formatted_categories, "Redmine 로드맵 데이터", @roadmap_data.name)
       else
         # DB에 데이터가 없으면 기본 예제 데이터 사용
-        @all_roadmaps = build_default_roadmap_data("Redmine 로드맵 기본 데이터", @roadmap_data.name)
+        @all_roadmaps = build_default_roadmap_data("Redmine 로드맵 기본 데이터", @roadmap_data&.name || "Default")
       end
     end
 
