@@ -112,8 +112,8 @@
   }
 
   holidays = []
-  if defined?(Holiday)
-    holidays = Holiday.for_date_range( start_date, end_date )
+  if TxBaseHelper::HolidayApi.available?
+    holidays = TxBaseHelper::HolidayApi.for_date_range( start_date, end_date )
   end
 %>
 

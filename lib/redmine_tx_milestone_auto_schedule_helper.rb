@@ -333,12 +333,12 @@ module RedmineTxMilestoneAutoScheduleHelper
           end   
     
           def is_working_day?(date)
-    
+
             # 공휴일 얻어두기
-            if defined?(Holiday)
-              return false if Holiday.holiday?( date )
+            if TxBaseHelper::HolidayApi.available?
+              return false if TxBaseHelper::HolidayApi.holiday?(date)
             end
-    
+
             return !date.saturday? && !date.sunday?
           end
     
