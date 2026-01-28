@@ -157,7 +157,7 @@ all_groups = Group.all.reject { |group| excluded_group_ids.include?(group.id) }
     end
     version_markers << { date: version.effective_date, name: version.name, color: '#5555cc', side: 'right' }
   end
-  
+
   # 메인 일감별 색상 팔레트 정의
   color_palette = [
     '#98E5B0', '#FFD280', '#C897CE', '#8FC5F0', '#FFB0B0', 
@@ -213,7 +213,23 @@ all_groups = Group.all.reject { |group| excluded_group_ids.include?(group.id) }
                          Tracker.roadmap_trackers_ids ).uniq
 
   filtered_issues = filtered_issues.where.not(tracker_id: excluded_tracker_ids)
-  
+
+  # 공휴일 데이터 수집 (타임라인 표시 범위)
+  # 타임라인 시작일: display_start_date, 종료일: 필터링된 일감들의 최대 완료일 + 여유(60일)
+  timeline_start_date = display_start_date
+  max_due_date = filtered_issues.maximum(:due_date) || Date.today
+  timeline_end_date = max_due_date + 60.days
+
+  # 공휴일 조회
+  # for_date_range는 Hash를 반환하고, select는 [[date, name], ...] 형태의 배열을 반환
+  holidays = if TxBaseHelper::HolidayApi.available?
+    holiday_data = TxBaseHelper::HolidayApi.for_date_range(timeline_start_date, timeline_end_date)
+    # holiday_data는 [[date, name], ...] 형태의 배열
+    holiday_data.map { |date, name| date.strftime('%Y-%m-%d') }
+  else
+    []
+  end
+
   # 전체 일감에도 동일한 tracker 필터 적용 (배제된 일감 계산에 사용)
   filtered_all_issues = all_issues.where.not(tracker_id: excluded_tracker_ids)
                                   .where.not(status_id: IssueStatus.discarded_ids)
@@ -599,7 +615,8 @@ $(document).ready(function() {
       eventLabel: "담당자",
       rowHeight: 15,
       showScheduleName: true,
-      startDate: "<%= display_start_date.strftime('%Y-%m-%d') %>"
+      startDate: "<%= display_start_date.strftime('%Y-%m-%d') %>",
+      holidays: <%= holidays.to_json.html_safe %>
     },
     categories: [],
     legends: []
