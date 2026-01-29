@@ -4,6 +4,17 @@ module RedmineTxMilestoneAutoScheduleHelper
     render_on :view_issues_show_details_bottom, partial: 'issues/estimated_due_date_fields'
   end
 
+    # IssueRelation 패치: 레드마인 기본 자동 스케줄링 제어
+    #
+    # 레드마인의 기본 자동 스케줄링 기능(set_issue_to_dates)을 설정에 따라 선택적으로 비활성화합니다.
+    # 이 플러그인의 자체 AutoScheduler 로직과 충돌을 방지하기 위해 사용됩니다.
+    #
+    # 설정:
+    #   - setting_milestone_use_redmine_auto_schedule = 'true': 레드마인 기본 동작 사용
+    #   - setting_milestone_use_redmine_auto_schedule = 'false' 또는 미설정: 기본 동작 무시
+    #
+    # 사용법:
+    #   IssueRelation.prepend(RedmineTxMilestoneAutoScheduleHelper::IssueRelationPatch)
     module IssueRelationPatch
 
         # 제대로 동작하지 않는 레드마인 기본 기능 제거.
