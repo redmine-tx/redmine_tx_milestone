@@ -586,11 +586,24 @@ function toggleOthersRows() {
     created = bug_category ? bug_category[:created] : 0
     completed = bug_category ? bug_category[:completed] : 0
 
+    # 날짜 타입 확인 (토요일, 일요일, 공휴일, 평일)
+    date = day_data[:day]
+    date_type = if TxBaseHelper::HolidayApi.available? && TxBaseHelper::HolidayApi.holiday?(date)
+                  'holiday'
+                elsif date.sunday?
+                  'sunday'
+                elsif date.saturday?
+                  'saturday'
+                else
+                  'weekday'
+                end
+
     bug_data << {
-      date: day_data[:day].strftime('%m-%d'),
+      date: date.strftime('%m-%d'),
       created: created,
       completed: completed,
-      remaining: remaining_bugs
+      remaining: remaining_bugs,
+      date_type: date_type
     }
 
     # 한 단계 과거로 이동: 오늘 기준 잔여에서 (그 날 해결 수)를 더하고 (그 날 생성 수)를 뺌
@@ -604,7 +617,22 @@ const labels = bugData.map(item => item.date);
 const createdData = bugData.map(item => item.created);
 const completedData = bugData.map(item => item.completed);
 const remainingData = bugData.map(item => item.remaining);
+const dateTypes = bugData.map(item => item.date_type);
 const fixingBugsCount = <%= fixing_bugs ? fixing_bugs.size : 0 %>;
+
+// 날짜 타입에 따른 색상 반환 함수
+function getDateLabelColor(dateType) {
+    switch(dateType) {
+        case 'saturday':
+            return 'rgb(0, 0, 255)';      // 토요일: 파란색
+        case 'sunday':
+            return 'rgb(255, 0, 0)';      // 일요일: 빨간색
+        case 'holiday':
+            return 'rgb(255, 0, 0)';      // 공휴일: 빨간색
+        default:
+            return 'rgb(102, 102, 102)';  // 평일: 기본 회색
+    }
+}
 
 const ctx = document.getElementById('bugTrendChart').getContext('2d');
 
@@ -821,6 +849,12 @@ const bugTrendChart = new Chart(ctx, {
                 title: {
                     display: true,
                     text: '날짜'
+                },
+                ticks: {
+                    color: function(context) {
+                        const index = context.index;
+                        return getDateLabelColor(dateTypes[index]);
+                    }
                 }
             }
         },
