@@ -1,111 +1,123 @@
-<div class="container">
+<div id="tx-milestone-settings">
 
   <h3>일정 자동 배치 설정</h3>
   <p>
-    <label for="settings_setting_milestone_use_redmine_auto_schedule">레드마인 자동 일정 배치 사용 여부</label>
     <%= check_box_tag "settings[setting_milestone_use_redmine_auto_schedule]", @settings["setting_milestone_use_redmine_auto_schedule"], @settings["setting_milestone_use_redmine_auto_schedule"] == 'true' %>
+    <label for="settings_setting_milestone_use_redmine_auto_schedule">레드마인 자동 일정 배치 사용</label>
+    <span class="description">레드마인의 기본 자동 스케줄링 기능(set_issue_to_dates)을 설정에 따라 선택적으로 비활성화합니다. <font color="red" style="font-weight: bold;">이 플러그인의 자체 AutoScheduler 로직과 충돌을 방지하기 위해 사용되므로 특별한 경우가 아니면 체크하지 마세요.</font></span>
   </p>
-   
+
+  <br>
+
   <h3>마감기한 설정</h3>
-  
-  <% (1..5).each do |i| %>
+  <p class="description">마일스톤 마감일 이전에 표시할 일정 마크를 설정합니다.</p>
 
-    <p>
-      <label for="settings_setting_milestone_days_<%= i %>">마감기한<%= i %> 일수</label>
-      <%= number_field_tag "settings[setting_milestone_days_#{i}]", @settings["setting_milestone_days_#{i}"], size: 10, min: 1 %>
-    </p>
+  <table class="list" id="milestone-deadlines">
+    <thead>
+      <tr>
+        <th>마감 ?일전</th>
+        <th>제목</th>
+        <th class="buttons"></th>
+      </tr>
+    </thead>
+    <tbody>
+      <% deadlines = RedmineTxMilestone::SettingsMigration.get_deadlines(@settings) %>
+      <% deadlines.each do |deadline| %>
+      <tr class="deadline-entry">
+        <td>
+          <%= number_field_tag "settings[setting_milestone_deadlines][][days]",
+                               deadline['days'], id: nil, size: 10, min: 1 %>
+        </td>
+        <td>
+          <%= text_field_tag "settings[setting_milestone_deadlines][][title]",
+                             deadline['title'], id: nil, size: 30 %>
+        </td>
+        <td class="buttons">
+          <a href="#" class="delete-deadline icon-only icon-del" title="삭제"><%= sprite_icon('del', '삭제') %></a>
+        </td>
+      </tr>
+      <% end %>
+      <tr>
+        <td colspan="2"></td>
+        <td class="buttons">
+          <a href="#" class="add-deadline icon-only icon-add" title="추가"><%= sprite_icon('add', '추가') %></a>
+        </td>
+      </tr>
+    </tbody>
+  </table>
 
-     <p>
-      <label for="settings_setting_milestone_title_<%= i %>">마감기한<%= i %> 제목</label>
-      <%= text_field_tag "settings[setting_milestone_title_#{i}]", @settings["setting_milestone_title_#{i}"], size: 30 %>
-    </p>
-    
-  <% end %>    
- 
 </div>
 
 <style>
-.container {
-  max-width: 1200px;
-  margin: 0 auto;
-  padding: 20px;
-  box-sizing: border-box;
+/* .tabular.settings 상속 스타일 전체 리셋 */
+#tx-milestone-settings p {
+  padding-left: 0;
+  clear: none;
+  overflow: visible;
 }
 
-.section {
-  background: #fff;
-  border-radius: 8px;
-  box-shadow: 0 2px 4px rgba(0,0,0,0.1);
-  padding: 20px;
-  margin-bottom: 24px;
-}
-
-.title {
-  color: #2c3e50;
-  font-size: 1.2em;
-  margin-bottom: 20px;
-  padding-bottom: 10px;
-  border-bottom: 2px solid #eee;
-}
-
-.grid {
-  display: flex;
-  flex-direction: column;
-  gap: 20px;
-  width: 100%;
-}
-
-.item {
-  display: flex;
-  flex-direction: column;
-  align-items: stretch;
-  gap: 8px;
-  width: 100%;
-  box-sizing: border-box;
-}
-
-.item h3 {
-  font-weight: 600;
-  color: #555;
-  font-size: 0.9em;
-  display: block;
-  width: 100%;
+#tx-milestone-settings label {
+  float: none;
+  width: auto;
+  margin-left: 0;
   text-align: left;
-  margin-bottom: 4px;
+  font-weight: bold;
 }
 
-.select-wrapper {
-  width: 100%;
+#tx-milestone-settings input,
+#tx-milestone-settings select,
+#tx-milestone-settings textarea {
+  max-width: none;
 }
 
-.select {
-  width: 100%;
-  padding: 8px;
-  border: 1px solid #ddd;
-  border-radius: 4px;
-  background-color: #f8f9fa;
-  min-height: 120px;
-  box-sizing: border-box;
+/* 테이블 스타일 */
+#milestone-deadlines {
+  width: auto;
+  margin-top: 8px;
 }
 
-.select:focus {
-  border-color: #3498db;
-  outline: none;
-  box-shadow: 0 0 0 2px rgba(52,152,219,0.2);
+#milestone-deadlines td input[type="number"] {
+  width: 80px;
 }
 
-/* 화면이 넓을 때는 2열 또는 3열로 표시 */
-@media (min-width: 768px) {
-  .grid {
-    display: grid;
-    grid-template-columns: repeat(auto-fit, minmax(350px, 1fr));
-    gap: 20px;
-  }
-  
-  .item {
-    min-width: 0;
-  }
+#milestone-deadlines td input[type="text"] {
+  width: 200px;
+}
+
+/* 체크박스 인라인 정렬 */
+#tx-milestone-settings p label {
+  display: inline;
+  margin-right: 4px;
 }
 </style>
 
-<%= Setting[:plugin_redmine_tx_milestone] %>
+<script>
+$(function() {
+  var $tbody = $('#milestone-deadlines tbody');
+
+  // 행 삭제
+  $tbody.on('click', '.delete-deadline', function(e) {
+    e.preventDefault();
+    // 최소 1개 행 유지
+    if ($tbody.find('.deadline-entry').length > 1) {
+      $(this).closest('tr').remove();
+    }
+  });
+
+  // 삭제 버튼 HTML 템플릿 (기존 행에서 복사)
+  var deleteIconHtml = $tbody.find('.delete-deadline').first().html() ||
+    '<span class="icon-label">삭제</span>';
+
+  // 행 추가
+  $tbody.on('click', '.add-deadline', function(e) {
+    e.preventDefault();
+    var newRow = '<tr class="deadline-entry">' +
+      '<td><input type="number" name="settings[setting_milestone_deadlines][][days]" value="" size="10" min="1"></td>' +
+      '<td><input type="text" name="settings[setting_milestone_deadlines][][title]" value="" size="30"></td>' +
+      '<td class="buttons"><a href="#" class="delete-deadline icon-only icon-del" title="삭제">' +
+      deleteIconHtml + '</a></td>' +
+      '</tr>';
+    $(this).closest('tr').before(newRow);
+  });
+});
+</script>

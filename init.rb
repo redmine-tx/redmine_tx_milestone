@@ -25,24 +25,29 @@ Redmine::Plugin.register :redmine_tx_milestone do
   end
 
   settings :default => {
-    'setting_milestone_days_1' => '7',
-    'setting_milestone_title_1' => '마감 1주전',
-    'setting_milestone_days_2' => '14',
-    'setting_milestone_title_2' => '마감 2주전',
-    'setting_milestone_days_3' => '',
-    'setting_milestone_title_3' => '',
-    'setting_milestone_days_4' => '',
-    'setting_milestone_title_4' => '',
-    'setting_milestone_days_5' => '',
-    'setting_milestone_title_5' => '',
+    'setting_milestone_deadlines' => [
+      { 'days' => '7', 'title' => '마감 1주전' },
+      { 'days' => '14', 'title' => '마감 2주전' }
+    ],
     'setting_milestone_use_redmine_auto_schedule' => 'false'
   }, :partial => 'settings/redmine_tx_milestone'
 end
 
 Rails.application.config.after_initialize do
+  require_dependency File.expand_path('../lib/redmine_tx_milestone/settings_migration', __FILE__)
   require_dependency File.expand_path('../lib/redmine_tx_milestone_helper', __FILE__)
 
-  Version.send(:include, RedmineTxMilestoneHelper::VersionPatch)  
+  # 플러그인 로드 시 이전 형식 → 새 형식 자동 마이그레이션
+  if Setting.plugin_redmine_tx_milestone.present?
+    current = Setting.plugin_redmine_tx_milestone
+    if current['setting_milestone_deadlines'].blank? && current['setting_milestone_days_1'].present?
+      Rails.logger.info "[RedmineTxMilestone] Auto-migrating settings to new format"
+      migrated = RedmineTxMilestone::SettingsMigration.migrate_to_array(current)
+      Setting.plugin_redmine_tx_milestone = migrated
+    end
+  end
+
+  Version.send(:include, RedmineTxMilestoneHelper::VersionPatch)
   Issue.send(:prepend, RedmineTxMilestoneAutoScheduleHelper::IssuePatch)
   IssueRelation.send(:prepend, RedmineTxMilestoneAutoScheduleHelper::IssueRelationPatch)
 end

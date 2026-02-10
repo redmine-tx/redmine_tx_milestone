@@ -260,14 +260,16 @@ module RedmineTxMilestoneHelper
     def marks
       return [] unless effective_date
       date_marks = []
-      (1..5).each do |i|
-          v1 = Setting[:plugin_redmine_tx_milestone]["setting_milestone_days_#{i}"]
-          v2 = Setting[:plugin_redmine_tx_milestone]["setting_milestone_title_#{i}"]
-          next if v1 == '' || v1 == nil
+      deadlines = RedmineTxMilestone::SettingsMigration.get_deadlines(
+        Setting[:plugin_redmine_tx_milestone]
+      )
+      deadlines.each do |deadline|
+        days = deadline['days']
+        title = deadline['title']
+        next if days.blank?
 
-          date = (effective_date - v1.to_i.days).to_date
-
-          date_marks.push({ date: date, name: v2 })
+        date = (effective_date - days.to_i.days).to_date
+        date_marks.push({ date: date, name: title })
       end
 
       # 데이터 타입이 날짜 타입인 커스텀 필드가 있으면 해당 값도 추가
