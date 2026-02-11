@@ -1,7 +1,7 @@
 <%= render :partial => 'milestone/roadmap_style' %>
 
 <!-- 여기에 여러 로드맵을 편집할 수 있게 탭 추가 -->
-<div class="tabs">
+<div class="tabs tabs-wrap">
   <ul>
   <% @roadmap_names.each_with_index do |name, index| %>
     <li><a href="#" class="roadmap-tab" data-roadmap-name="<%= name %>"><%= name %></a></li>

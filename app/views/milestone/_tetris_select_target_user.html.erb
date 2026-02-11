@@ -1,5 +1,5 @@
 <!-- 그룹 탭 리스트 -->
-<div class="tabs">
+<div class="tabs tabs-wrap">
   <ul>
     <% @groups.each { |group, info| %>
       <li><%= link_to(group.name, "#group-#{group.id}", class: (params[:group_id] == group.id.to_s ? 'selected' : '')) %></li>

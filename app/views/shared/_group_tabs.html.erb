@@ -1,4 +1,4 @@
-<div class="tabs">
+<div class="tabs tabs-wrap">
   <ul>
     <li><%= link_to "전체보기", "?view=#{current_view}", class: (current_view != 'group_detail' || selected_group_id.blank? ? 'selected' : '') %></li>
     <% groups.each do |group, users| %>

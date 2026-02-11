@@ -1,4 +1,4 @@
-<div class="tabs">
+<div class="tabs tabs-wrap">
   <ul>
     <li><%= link_to '🏠 시작', '/projects/' + params[:project_id].to_s + '/milestone/tools', class: params[:tool].nil? ? 'selected' : '' %></li>
     <li><%= link_to '📅 연계일감 점검', '/projects/' + params[:project_id].to_s + '/milestone/tools/check_related_issues', class: params[:tool] == 'check_related_issues' ? 'selected' : '' %></li>

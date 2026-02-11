@@ -1,4 +1,9 @@
-<div class="tabs">
+<style>
+  #content .tabs.tabs-wrap { height: auto; overflow: visible; }
+  #content .tabs.tabs-wrap ul { position: static; min-width: 0; display: flex; flex-wrap: wrap; }
+  #content .tabs.tabs-wrap ul li { margin-bottom: 4px; }
+</style>
+<div class="tabs tabs-wrap">
   <ul>
     <li><%= link_to '🏠 시작', '/projects/' + params[:project_id].to_s + '/milestone', class: action_name == 'index' ? 'selected' : '' %></li>
     <li><%= link_to '🗺️ 로드맵', '/projects/' + params[:project_id].to_s + '/milestone/roadmap', class: action_name == 'roadmap' ? 'selected' : '' %></li>

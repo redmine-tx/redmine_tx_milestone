@@ -1,4 +1,4 @@
-<div class="tabs">
+<div class="tabs tabs-wrap">
   <ul>
     <% q = params[:version_id].present? ? ("?version_id=" + params[:version_id].to_s) : '' %>
     <li><%= link_to '🏠 시작', '/projects/' + params[:project_id].to_s + '/milestone/report' + q, class: params[:report_type].nil? ? 'selected' : '' %></li>
