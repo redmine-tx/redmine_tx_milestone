@@ -185,8 +185,120 @@ module RedmineTxMilestoneHelper
     link_to count, full_url, target: '_blank'
   end
 
-  module_function :get_version_color, :build_issue_query, :render_issues, 
-                  :build_bug_issues_filter_params, :link_to_issue_with_id, :link_to_bug_issues_count
+  # 일감 상태에 따른 CSS 클래스명 반환 (인라인 스타일 대체)
+  def gantt_issue_css_class(issue)
+    if IssueStatus.is_postponed?(issue.status_id)
+      'issue-postponed'
+    elsif IssueStatus.is_discarded?(issue.status_id)
+      'issue-discarded'
+    elsif IssueStatus.is_implemented?(issue.status_id)
+      'issue-implemented'
+    elsif IssueStatus.is_in_progress?(issue.status_id)
+      'issue-in-progress'
+    else
+      if issue.due_date && issue.due_date < Date.today
+        'issue-overdue'
+      else
+        'issue-default'
+      end
+    end
+  end
+
+  # paused 구간 배치 쿼리 (N+1 방지)
+  def gantt_paused_periods(issues)
+    paused_periods_map = {}
+    paused_status_ids = IssueStatus.paused_ids.map(&:to_s)
+    if paused_status_ids.any?
+      paused_transitions = JournalDetail.joins(:journal)
+        .where(journals: { journalized_type: 'Issue', journalized_id: issues.map(&:id) })
+        .where(property: 'attr', prop_key: 'status_id')
+        .where("journal_details.old_value IN (?) OR journal_details.value IN (?)", paused_status_ids, paused_status_ids)
+        .select('journals.journalized_id AS issue_id, journals.created_on, journal_details.old_value, journal_details.value')
+        .order('journals.journalized_id, journals.created_on')
+
+      paused_transitions.group_by(&:issue_id).each do |issue_id, trans|
+        periods = []
+        trans.each do |t|
+          if paused_status_ids.include?(t.value.to_s)
+            periods << { entered_at: t.created_on.to_date, exited_at: nil }
+          elsif paused_status_ids.include?(t.old_value.to_s) && periods.last && periods.last[:exited_at].nil?
+            periods.last[:exited_at] = t.created_on.to_date
+          end
+        end
+        paused_periods_map[issue_id] = periods if periods.any?
+      end
+    end
+    paused_periods_map
+  end
+
+  # parent-child depth 계산 (이슈 목록 기반)
+  def gantt_depth_map(issues)
+    depth_map = {}
+    issues.each_with_index do |issue, index|
+      depth = if index > 0
+        prev_issue = issues[index - 1]
+        if issue.parent_id == prev_issue.id
+          depth_map[issue.parent_id].to_i + 1
+        elsif issue.parent_id == prev_issue.parent_id
+          depth_map[prev_issue.id].to_i
+        else
+          if depth_map[issue.parent_id]
+            depth_map[issue.parent_id].to_i + 1
+          else
+            0
+          end
+        end
+      else
+        0
+      end
+      depth_map[issue.id] = depth
+    end
+    depth_map
+  end
+
+  # 간트 차트 날짜 범위 계산
+  def gantt_date_range(issues, gantt_opts, due_date)
+    before_length = gantt_opts[:before_length] || 20.days
+    after_length = gantt_opts[:after_length] || 30.days
+
+    min_date = issues.map { |issue| [issue.start_date, issue.begin_time&.to_date] }.flatten.compact.min
+    before_length = [ (min_date ? (Date.today - min_date).days + 1.days : 15.days), 15.days ].max unless gantt_opts[:before_length]
+
+    max_date = issues.map { |issue| [issue.due_date, issue.end_time&.to_date] }.flatten.compact.max
+    after_length = [ (max_date ? (max_date - Date.today).days + 5.days : 5.days), 5.days ].max unless gantt_opts[:after_length]
+    after_length = [ after_length, (due_date - Date.today).days + 5.days ].max if due_date
+
+    start_date = Date.today - before_length
+    end_date = Date.today + after_length
+    today_index = (Date.today - start_date).to_i
+    due_date_index = due_date ? (due_date - start_date).to_i + 1 : nil
+    total_days = (end_date - start_date).to_i
+
+    {
+      start_date: start_date,
+      end_date: end_date,
+      today_index: today_index,
+      due_date_index: due_date_index,
+      total_days: total_days
+    }
+  end
+
+  # 간트 차트용 이슈 배열 생성
+  def gantt_prepare_issues(issues, depth_map)
+    issues.map do |issue|
+      show_no_due_date_warning = issue.due_date.nil? && !Tracker.is_exception?(issue.tracker_id) && !IssueStatus.is_implemented?(issue.status_id)
+      {
+        issue: issue,
+        depth: depth_map[issue.id] || 0,
+        show_no_due_date_warning: show_no_due_date_warning
+      }
+    end
+  end
+
+  module_function :get_version_color, :build_issue_query, :render_issues,
+                  :build_bug_issues_filter_params, :link_to_issue_with_id, :link_to_bug_issues_count,
+                  :gantt_issue_css_class, :gantt_paused_periods, :gantt_depth_map,
+                  :gantt_date_range, :gantt_prepare_issues
 
   class RedmineTxMilestoneHook < Redmine::Hook::ViewListener
     # 이슈 페이지 action menu에 로드맵 및 일정요약 링크 추가

@@ -199,10 +199,10 @@
     height: 100%;
     background: repeating-linear-gradient(
       -45deg,
-      rgba(0, 0, 0, 0.35),
-      rgba(0, 0, 0, 0.35) 1px,
-      transparent 1px,
-      transparent 3px
+      rgba(255, 255, 255, 0.8),
+      rgba(255, 255, 255, 0.8) 3px,
+      transparent 3px,
+      transparent 4px
     );
     border-radius: 0.1875em;
     z-index: 3;
@@ -335,6 +335,35 @@
   .task-name.priority-5,
   .assignee.priority-5 {
     background-color: rgba(255, 0, 0, 0.3);
+  }
+
+  /* 이슈 상태별 제목 스타일 */
+  .gantt-wrapper .issue-subject-link.issue-postponed { color: #860; }
+  .gantt-wrapper .issue-subject-link.issue-discarded { color: #aaa; text-decoration: line-through; opacity: 0.8; }
+  .gantt-wrapper .issue-subject-link.issue-implemented { color: #aaa; }
+  .gantt-wrapper .issue-subject-link.issue-in-progress { font-weight: bold; }
+  .gantt-wrapper .issue-subject-link.issue-overdue { color: #d55; font-weight: bold; }
+  .gantt-wrapper .issue-subject-link.issue-default { opacity: 0.8; }
+
+  /* 상태 아이콘 */
+  .gantt-wrapper .icon-postponed { color: #860; }
+  .gantt-wrapper .icon-no-due-date { color: #f99; }
+  .gantt-wrapper .icon-paused { color: #f90; }
+  .gantt-wrapper .icon-implemented { color: #0c0; font-weight: bold; }
+  .gantt-wrapper .icon-discarded { color: #666; font-weight: bold; }
+
+  /* Depth 들여쓰기 */
+  .gantt-wrapper .depth-indent { color: #aaa; }
+  .gantt-wrapper .virtual-marker { color: #000; font-weight: bold; }
+
+  /* 팁/상태이력 라벨 */
+  .gantt-wrapper .gantt-tip-label {
+    font-weight: bold; z-index: 10; font-size: 10px; color: #f66;
+    position: absolute; bottom: 0; display: inline-block; width: 1000%; text-align: left;
+  }
+  .gantt-wrapper .gantt-status-label {
+    font-weight: bold; z-index: 10; font-size: 8px; color: #000;
+    position: absolute; bottom: 0; display: inline-block; width: 1000%; text-align: left;
   }
 </style>
 
