@@ -1,4 +1,7 @@
 <%
+  # 다른 컨트롤러(예: MyController)에서 렌더링될 때도 헬퍼 메서드 사용 가능하도록
+  extend RedmineTxMilestoneHelper unless respond_to?(:gantt_paused_periods, true)
+
   def render_once( target_view )
     @style_included ||= false
     unless @style_included

@@ -347,7 +347,7 @@ module RedmineTxMilestoneHelper
               if (#{is_roadmap_tracker} && !$ctx.find('#milestone-roadmap-link').length) {
                 linksHtml += ' <a href="#{roadmap_url}" class="icon icon-projects" title="로드맵 보기" target="_blank">' +
                              '<svg class="s18 icon-svg" aria-hidden="true"><use href="#{icons_path}#icon--projects"></use></svg>' +
-                             '<span class="icon-label">로드맵</span></a>';
+                             '<span class="icon-label">간트</span></a>';
               }
 
               // 일정요약 링크 추가 (항상 표시)
