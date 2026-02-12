@@ -28,15 +28,10 @@ This plugin is designed to run within a Redmine environment. The standard develo
 
 1. **MilestoneController** (`app/controllers/milestone_controller.rb`):
    - Main controller handling milestone functionality
-   - Key actions: `index`, `gantt`, `roadmap`, `tetris` (auto-scheduling), `tools`
-   - Handles roadmap data saving/loading and issue auto-scheduling
+   - Key actions: `index`, `gantt`, `tetris` (auto-scheduling), `tools`, `report`
+   - Handles issue auto-scheduling and project statistics
 
-2. **RoadmapData Model** (`app/models/roadmap_data.rb`):
-   - Stores JSON roadmap data per project
-   - Provides methods for accessing categories and metadata
-   - Handles active roadmap retrieval
-
-3. **Helper Modules**:
+2. **Helper Modules**:
    - `RedmineTxMilestoneHelper`: UI helpers, version color coding, issue rendering
    - `RedmineTxMilestoneAutoScheduleHelper`: Core auto-scheduling logic with topological sorting
 
@@ -44,8 +39,8 @@ This plugin is designed to run within a Redmine environment. The standard develo
 
 - **Milestone Management**: Visual milestone tracking with configurable deadline warnings
 - **Auto-scheduling**: Tetris-style issue scheduling considering dependencies and resource constraints
-- **Roadmap Visualization**: Interactive roadmap with categories, events, and schedules
 - **Gantt Charts**: Enhanced Gantt chart views for project visualization
+- **Report**: Project statistics and bug tracking dashboards
 - **Issue Relations**: Handles precedence/blocking relationships between issues
 
 ### Plugin Integration
@@ -61,8 +56,8 @@ Routes are defined in `config/routes.rb` with nested project resources:
 - `/projects/:project_id/milestone/` - Main milestone views
 - `/projects/:project_id/milestone/gantt` - Gantt chart views
 - `/projects/:project_id/milestone/tetris` - Auto-scheduling interface
-- `/projects/:project_id/milestone/roadmap` - Roadmap visualization
 - `/projects/:project_id/milestone/tools` - Administrative tools
+- `/projects/:project_id/milestone/report` - Project statistics and reports
 
 ### Settings and Configuration
 
@@ -73,7 +68,7 @@ Plugin settings are managed through Redmine's plugin settings system:
 
 ### Database
 
-The plugin includes migration `001_create_roadmap_data.rb` to create the `roadmap_data` table for storing JSON roadmap configurations.
+The plugin includes migration `001_create_roadmap_data.rb` which originally created the `roadmap_data` table. This table has been renamed to `timeline_data` and migrated to the `redmine_tx_timeline` plugin.
 
 ## Dependencies
 
@@ -87,5 +82,5 @@ The plugin provides extensive UI components:
 - Milestone overview and detail views
 - Interactive Gantt charts with styling
 - Auto-scheduling interfaces for users and issues
-- Roadmap visualization with drag-and-drop functionality
+- Project statistics and report dashboards
 - Administrative tools for validation and synchronization
