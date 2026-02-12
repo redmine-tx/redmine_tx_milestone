@@ -176,6 +176,7 @@
     background: #7fa;
     border-radius: 0.1875em;
     z-index: 2; /* 날짜 셀(task-cell) 위, today-column 보다는 아래에 위치 */
+    overflow: hidden; /* paused 오버레이가 바 밖으로 넘치지 않도록 */
     /* position: absolute 또는 relative는 JavaScript에서 동적으로 설정될 것으로 예상 */
   }
 
@@ -189,6 +190,23 @@
     border-radius: 0.1875em; /* task-bar와 동일한 둥근 모서리 */
     display: block; /* 너비(width)를 가질 수 있도록 블록 요소로 변경 */
     /* width는 JavaScript에서 진행률에 따라 동적으로 설정될 것으로 예상 */
+  }
+
+  /* task-bar-paused: paused 구간 오버레이 (사선 줄무늬) */
+  .gantt-wrapper .task-bar-paused {
+    position: absolute;
+    top: 0;
+    height: 100%;
+    background: repeating-linear-gradient(
+      -45deg,
+      rgba(0, 0, 0, 0.35),
+      rgba(0, 0, 0, 0.35) 1px,
+      transparent 1px,
+      transparent 3px
+    );
+    border-radius: 0.1875em;
+    z-index: 3;
+    pointer-events: none;
   }
 
   .gantt-wrapper .task-bar.completed {

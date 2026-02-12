@@ -68,6 +68,30 @@
   person_width = gantt_opts[:person_width] || 90
   show_status_history = gantt_opts[:show_status_history] || params[:show_status_history] || false
 
+  # paused 구간 계산
+  paused_periods_map = {}
+  paused_status_ids = IssueStatus.paused_ids.map(&:to_s)
+  if paused_status_ids.any?
+    paused_transitions = JournalDetail.joins(:journal)
+      .where(journals: { journalized_type: 'Issue', journalized_id: issues.map(&:id) })
+      .where(property: 'attr', prop_key: 'status_id')
+      .where("journal_details.old_value IN (?) OR journal_details.value IN (?)", paused_status_ids, paused_status_ids)
+      .select('journals.journalized_id AS issue_id, journals.created_on, journal_details.old_value, journal_details.value')
+      .order('journals.journalized_id, journals.created_on')
+
+    paused_transitions.group_by(&:issue_id).each do |issue_id, trans|
+      periods = []
+      trans.each do |t|
+        if paused_status_ids.include?(t.value.to_s)
+          periods << { entered_at: t.created_on.to_date, exited_at: nil }
+        elsif paused_status_ids.include?(t.old_value.to_s) && periods.last && periods.last[:exited_at].nil?
+          periods.last[:exited_at] = t.created_on.to_date
+        end
+      end
+      paused_periods_map[issue_id] = periods if periods.any?
+    end
+  end
+
   start_date = Date.today - before_length
   end_date = Date.today + after_length
   today_index = (Date.today - start_date).to_i
@@ -167,6 +191,8 @@
                     <span style="color: #0c0; font-weight: bold;">✓</span>
                 <% elsif IssueStatus.is_in_review?(issue.status_id) then %>
                     🔍
+                <% elsif IssueStatus.is_paused?(issue.status_id) then %>
+                    <i class='fas fa-pause' style='color: #f90;'> </i>
                 <% elsif IssueStatus.is_new?(issue.status_id) && issue.start_date && issue.start_date <= Date.today then %>
                     ⚠️
                 <% elsif !IssueStatus.is_completed?(issue.status_id) && issue.due_date && issue.due_date < Date.today then %>
@@ -347,6 +373,17 @@
                   <div class="task-bar<%= IssueStatus.is_implemented?( issue.status_id ) ? ' completed' : '' %><%= IssueStatus.is_in_review?( issue.status_id ) ? ' confirm' : '' %>" style="width: <%= bar_width %>px; height: <%=cell_height-4%>px; position: absolute; left: 0; z-index: 1;" data-issue-tooltip="<%= issue.id %>">
                     <% if IssueStatus.is_in_progress?( issue.status_id ) %>
                       <div class="task-bar-progress<%= IssueStatus.is_in_review?( issue.status_id ) ? ' confirm' : '' %>" style="width: <%= issue.done_ratio %>%;"></div>
+                    <% end %>
+                    <%# paused 구간 오버레이 %>
+                    <% (paused_periods_map[issue.id] || []).each do |period| %>
+                      <%
+                        p_start = [period[:entered_at], date].max
+                        p_end   = [period[:exited_at] || Date.today, issue_end_date].min
+                        next if p_start > p_end || p_start > issue_end_date || p_end < date
+                        left_px  = (p_start - date).to_i * cell_width
+                        width_px = (p_end - p_start + 1).to_i * cell_width
+                      %>
+                      <div class="task-bar-paused" style="left: <%= left_px %>px; width: <%= width_px %>px;"></div>
                     <% end %>
                   </div>
                   <div class="task-tooltip-hit" data-issue-tooltip="<%= issue.id %>" style="position: absolute; left: 0; top: 0; width: <%= (show_line && date == line_start_date && line_width > bar_width) ? line_width : bar_width %>px; height: <%= cell_height %>px; z-index: 50;"></div>
