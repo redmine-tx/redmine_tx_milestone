@@ -165,7 +165,7 @@
                       .select { |parent| parent.fixed_version_id && parent.fixed_version.effective_date && parent.fixed_version.effective_date > Date.today - 2.month }
   
   all_issues = parent_issues.map { |parent|
-      invalid_child_issues = parent.children.select { |child|
+      invalid_child_issues = parent.descendants.select { |child|
           child.start_date.present? && child.due_date.present? &&
           ( parent.due_date == nil || child.due_date > parent.due_date ) &&
           child.status_id && !child.status.is_discarded?
