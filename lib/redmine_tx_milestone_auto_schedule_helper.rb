@@ -130,13 +130,14 @@ module RedmineTxMilestoneAutoScheduleHelper
             end
 
             start_date = find_available_start_date(
-              search_start_date, 
-              work_days, 
-              all_blocked_dates[issue.assigned_to_id], 
-              assigned_dates[issue.assigned_to_id], 
-              issue.estimated_hours
+              search_start_date,
+              work_days,
+              all_blocked_dates[issue.assigned_to_id],
+              assigned_dates[issue.assigned_to_id],
+              issue.estimated_hours,
+              issue.assigned_to
             )
-            due_date = calculate_due_date(start_date, work_days)
+            due_date = calculate_due_date(start_date, work_days, issue.assigned_to)
 
             #pp [ 'start_date', issue.id, search_start_date.strftime('%Y-%m-%d'), work_days, all_blocked_dates[issue.assigned_to_id], assigned_dates[issue.assigned_to_id], issue.estimated_hours, start_date.strftime('%Y-%m-%d') ]
             
@@ -343,54 +344,59 @@ module RedmineTxMilestoneAutoScheduleHelper
             return all_blocked_dates
           end   
     
-          def is_working_day?(date)
+          def is_working_day?(date, user = nil)
 
             # 공휴일 얻어두기
             if TxBaseHelper::HolidayApi.available?
               return false if TxBaseHelper::HolidayApi.holiday?(date)
             end
 
+            # 담당자 휴가 확인 (그룹 배정 일감은 제외)
+            if user.is_a?(User) && TxBaseHelper::UserVacationApi.available?
+              return false if TxBaseHelper::UserVacationApi.on_vacation?(user, date)
+            end
+
             return !date.saturday? && !date.sunday?
           end
     
           # 일정 배치 가능한 날짜 확인
-          def find_available_start_date(start_from, work_days, blocked_dates, assigned_dates, estimated_hours)
+          def find_available_start_date(start_from, work_days, blocked_dates, assigned_dates, estimated_hours, user = nil)
             current_date = start_from
-            
+
             loop do
               # 3. start_date는 토요일이나 일요일이 되어선 안됨
-              while !is_working_day?(current_date)
+              while !is_working_day?(current_date, user)
                 current_date += 1.day
               end
-              
+
               # 현재 날짜부터 작업 기간만큼의 due_date 계산
-              tentative_due_date = calculate_due_date(current_date, work_days)
-              
+              tentative_due_date = calculate_due_date(current_date, work_days, user)
+
               # 4. start_date ~ due_date가 다른 일감의 기간 혹은 blocked_dates와 중첩되지 않는지 확인
               if !date_range_overlaps?(current_date, tentative_due_date, blocked_dates, assigned_dates, estimated_hours)
                 return current_date
               end
-              
+
               # 중첩되면 다음 날로 이동
               current_date += 1.day
             end
-    
+
             return nil
           end
       
-          # 공휴일을 고려한 due_date 계산
-          def calculate_due_date(start_date, work_days)
+          # 공휴일/휴가를 고려한 due_date 계산
+          def calculate_due_date(start_date, work_days, user = nil)
             current_date = start_date
             remaining_days = work_days - 1 # start_date도 하루로 카운트
-            
+
             while remaining_days > 0
               current_date += 1.day
-              # 주말(토요일, 일요일)은 작업일에 포함하지 않음
-              if is_working_day?(current_date)
+              # 주말(토요일, 일요일), 공휴일, 휴가는 작업일에 포함하지 않음
+              if is_working_day?(current_date, user)
                 remaining_days -= 1
               end
             end
-            
+
             current_date
           end
 
