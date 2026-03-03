@@ -189,30 +189,35 @@ class MilestoneController < ApplicationController
         if params[:ids].present?
           updated_count = 0
           issues = Issue.where(id: params[:ids])
-          
+
           issues.each do |issue|
-            if issue.parent.present? && issue.due_date && (issue.parent.due_date.nil? || issue.parent.due_date < issue.due_date)
-              issue.parent.due_date = issue.due_date
-              if issue.parent.save
-                updated_count += 1
-              end
-            end
+            # 자식 일감들의 최대 완료일을 조회
+            max_child_due = issue.descendants
+                                .where.not(due_date: nil)
+                                .maximum(:due_date)
+
+            next unless max_child_due.present?
+            next unless issue.due_date.nil? || issue.due_date < max_child_due
+
+            # update_column으로 콜백/검증을 우회하여 직접 업데이트
+            issue.update_column(:due_date, max_child_due)
+            updated_count += 1
           end
-          
-          render json: { 
-            success: true, 
-            message: "#{updated_count}개 일감의 일정을 부모 일감에 반영했습니다." 
+
+          render json: {
+            success: true,
+            message: "#{updated_count}개 일감의 일정을 동기화했습니다."
           }
         else
-          render json: { 
-            success: false, 
-            message: "동기화할 일감을 선택해주세요." 
+          render json: {
+            success: false,
+            message: "동기화할 일감을 선택해주세요."
           }
         end
       rescue => e
-        render json: { 
-          success: false, 
-          message: "동기화 중 오류가 발생했습니다: #{e.message}" 
+        render json: {
+          success: false,
+          message: "동기화 중 오류가 발생했습니다: #{e.message}"
         }
       end
     end
