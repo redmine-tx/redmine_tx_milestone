@@ -157,7 +157,7 @@
             <th>진행률</th>
             <th>마감</th>
             <th>실무</th>
-            <th>완료</th>
+            <th>구현끝</th>
             <th>지연</th>
             <% if dev_deadline %><th>마감초과</th><% end %>
             <th>일정없음</th>
@@ -170,7 +170,7 @@
             <% stats = r[:descendant_stats] || {} %>
             <% is_overdue = stats[:overdue].to_i > 0 %>
             <% has_risk = stats[:past_dev_deadline].to_i > 0 %>
-            <% is_done = r[:stage_code].to_i >= 4 %>
+            <% is_done = r[:stage_code].to_i >= RedmineTxMilestone::SummaryService::STAGE_IMPLEMENTED %>
             <tr class="<%= 'db-row-risk' if has_risk && !is_done %> <%= 'db-row-overdue' if is_overdue && !is_done && !has_risk %> <%= 'db-row-closed' if is_done %>">
               <td><%= link_to r[:id], issue_path(r[:id]) %></td>
               <td class="db-subject"><%= link_to r[:subject].truncate(60), issue_path(r[:id]) %></td>
@@ -191,7 +191,7 @@
                 }
               %>
               <td class="db-num"><%= stats[:ids_total].present? ? link_to(stats[:total], filter_url.(:ids_total)) : stats[:total] %></td>
-              <td class="db-num"><%= stats[:ids_completed].present? ? link_to(stats[:completed], filter_url.(:ids_completed)) : stats[:completed] %></td>
+              <td class="db-num"><%= stats[:ids_implemented].present? ? link_to(stats[:implemented], filter_url.(:ids_implemented)) : stats[:implemented] %></td>
               <td class="db-num <%= 'db-num-alert' if is_overdue && !is_done %>"><%= stats[:ids_overdue].present? ? link_to(stats[:overdue], filter_url.(:ids_overdue)) : stats[:overdue] %></td>
               <% if dev_deadline %>
                 <td class="db-num <%= 'db-num-alert' if has_risk && !is_done %>"><%= stats[:ids_past_dev_deadline].present? ? link_to(stats[:past_dev_deadline], filter_url.(:ids_past_dev_deadline)) : stats[:past_dev_deadline] %></td>

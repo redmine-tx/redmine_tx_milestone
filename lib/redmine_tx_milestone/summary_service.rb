@@ -4,6 +4,10 @@ module RedmineTxMilestone
   #
   # All public methods return plain Hash/Array structures — no ActiveRecord objects leak out.
   class SummaryService
+    STAGE_IMPLEMENTED = 4   # 구현끝 이상 — 실질적 완료
+    STAGE_DISCARDED   = -2  # 폐기
+    STAGE_NEW         = 0   # 신규 — 미개시 판정 기준
+
     class << self
       # ─── Version Overview ──────────────────────────────────────
       # Returns a version with all top-level parent issues summarized,
@@ -163,11 +167,11 @@ module RedmineTxMilestone
           schedule_descendants = descendants.reject { |d| non_schedule_leaf?(d) }
           work_leaves = schedule_descendants.select { |d| d.children.empty? }
 
-          open_work = work_leaves.reject { |d| d.status.is_closed? }
-          closed_work = work_leaves.select { |d| d.status.is_closed? }
+          done_work = work_leaves.select { |d| implemented_or_above?(d) }
+          open_work = work_leaves - done_work
           overdue_work = open_work.select { |d| d.due_date && d.due_date < today }
           no_due_date_work = open_work.select { |d| d.due_date.nil? }
-          not_started_work = open_work.select { |d| d.start_date && d.start_date < today && d.status.respond_to?(:stage) && d.status.stage.to_i == 0 }
+          not_started_work = open_work.select { |d| d.start_date && d.start_date < today && d.status.respond_to?(:stage) && d.status.stage.to_i == STAGE_NEW }
           unassigned_work = open_work.select { |d| d.assigned_to.nil? }
 
           # Work leaves whose due_date exceeds dev deadline — risk to QA time
@@ -227,7 +231,7 @@ module RedmineTxMilestone
             is_closed: rm.status.is_closed?,
             descendant_stats: {
               total: work_leaves.size,
-              completed: closed_work.size,
+              implemented: done_work.size,
               in_progress: open_work.size,
               overdue: overdue_work.size,
               past_dev_deadline: past_dev_deadline.size,
@@ -237,7 +241,7 @@ module RedmineTxMilestone
               avg_done_ratio: work_leaves.size > 0 ? (work_leaves.sum { |d| d.done_ratio.to_i } / work_leaves.size.to_f).round(1) : 0,
               estimated_hours: work_leaves.sum { |d| d.estimated_hours.to_f },
               ids_total: work_leaves.map(&:id).join(','),
-              ids_completed: closed_work.map(&:id).join(','),
+              ids_implemented: done_work.map(&:id).join(','),
               ids_overdue: overdue_work.map(&:id).join(','),
               ids_past_dev_deadline: past_dev_deadline.map(&:id).join(','),
               ids_no_due_date: no_due_date_work.map(&:id).join(','),
@@ -257,7 +261,7 @@ module RedmineTxMilestone
         sorted = roadmap_summaries.sort_by do |r|
           [r[:stage_code] >= 4 ? 1 : 0,
            r[:descendant_stats][:overdue] > 0 ? 0 : 1,
-           -(r[:descendant_stats][:total] - r[:descendant_stats][:completed])]
+           -(r[:descendant_stats][:total] - r[:descendant_stats][:implemented])]
         end
 
         {
@@ -443,9 +447,14 @@ module RedmineTxMilestone
         end
       end
 
+      # Stage >= 4 (구현끝 이상) is treated as done
+      def implemented_or_above?(issue)
+        issue.status.respond_to?(:stage) && issue.status.stage.to_i >= STAGE_IMPLEMENTED
+      end
+
       # Discarded issues (stage -2) are excluded entirely
       def discarded?(issue)
-        issue.status.respond_to?(:stage) && issue.status.stage.to_i == -2
+        issue.status.respond_to?(:stage) && issue.status.stage.to_i == STAGE_DISCARDED
       end
 
       # Bug/exception/sidejob tracker leaf nodes are excluded from schedule calculations
