@@ -17,7 +17,7 @@
 
   <!-- 버전 요약 -->
   <div class="db-version-header">
-    <h2><%= v[:name] %></h2>
+    <h2><%= v[:name] %> <span class="db-done-ratio">(완료율: <%= v[:done_ratio].is_a?(Float) ? v[:done_ratio].round(1) : v[:done_ratio] %>%)</span></h2>
     <div class="db-version-meta">
       <span class="db-badge db-badge-<%= v[:status] %>"><%= v[:status] %></span>
       <% if dev_deadline %>
@@ -46,79 +46,96 @@
     </div>
   <% end %>
 
-  <!-- 진행률 바 -->
-  <div class="db-progress-section">
-    <div class="db-progress-bar-container">
-      <% if dev_deadline %>
-        <%
-          # dev deadline marker position
-          release = v[:due_date] ? Date.parse(v[:due_date]) : nil
-          start_date = roadmap.map { |r| r[:start_date] }.compact.map { |d| Date.parse(d) }.min || Date.today
-          range_end = release || Date.parse(dev_deadline) + 30
-          total_days = (range_end - start_date).to_i
-          dev_pct = total_days > 0 ? [((Date.parse(dev_deadline) - start_date).to_i * 100.0 / total_days).round(1), 100].min : 100
-        %>
-        <div class="db-deadline-marker" style="left:<%= dev_pct %>%;" title="개발마감 <%= dev_deadline %>"></div>
-      <% end %>
-      <div class="db-progress-bar" style="width: <%= v[:done_ratio] %>%;">
-        <span class="db-progress-text"><%= v[:done_ratio].is_a?(Float) ? v[:done_ratio].round(1) : v[:done_ratio] %>%</span>
+  <!-- 타임라인 -->
+  <%
+    tl_start = v[:timeline_start] ? Date.parse(v[:timeline_start]) : nil
+    tl_end   = v[:due_date] ? Date.parse(v[:due_date]) : nil
+    tl_marks = (v[:marks] || []).select { |m| m[:date].present? }.map { |m| { date: Date.parse(m[:date]), name: m[:name], is_deadline: m[:is_deadline] } }.sort_by { |m| m[:date] }
+    if tl_start && tl_end && tl_start < tl_end
+      tl_total = (tl_end - tl_start).to_i
+      tl_today_pct = [[(Date.today - tl_start).to_i * 100.0 / tl_total, 0].max, 100].min.round(1)
+  %>
+  <div class="db-timeline">
+    <div class="db-timeline-bar">
+      <div class="db-timeline-progress" style="width:<%= tl_today_pct %>%;" title="오늘 (<%= Date.today %>)">
+        <span class="db-timeline-today-label">오늘</span>
       </div>
+      <% tl_marks.each do |m| %>
+        <% m_pct = [[(m[:date] - tl_start).to_i * 100.0 / tl_total, 0].max, 100].min.round(1) %>
+        <div class="db-timeline-mark<%= ' db-timeline-mark-deadline' if m[:is_deadline] %>" style="left:<%= m_pct %>%;" title="<%= m[:name] %> (<%= m[:date] %>)">
+          <span class="db-timeline-mark-label"><%= m[:name] %></span>
+          <span class="db-timeline-mark-date"><%= m[:date].strftime('%-m/%-d') %></span>
+        </div>
+      <% end %>
     </div>
-    <% if v[:overdue] %>
-      <span class="db-label-overdue">마감 초과</span>
-    <% end %>
+    <div class="db-timeline-edges">
+      <span><%= tl_start %></span>
+      <span><%= tl_end %></span>
+    </div>
   </div>
+  <% end %>
+
 
   <div class="db-grid">
-    <!-- 단계별 분포 -->
-    <div class="db-card">
-      <h3>단계별 분포</h3>
-      <table class="db-table">
-        <thead><tr><th>단계</th><th>건수</th><th></th></tr></thead>
-        <tbody>
-          <% total_stage = stage_summary.values.sum %>
-          <% stage_summary.sort_by { |_, cnt| -cnt }.each do |stage, cnt| %>
-            <% pct = total_stage > 0 ? (cnt * 100.0 / total_stage).round(1) : 0 %>
-            <tr>
-              <td><%= stage %></td>
-              <td class="db-num"><%= cnt %></td>
-              <td style="width: 50%;">
-                <div class="db-bar-bg"><div class="db-bar-fill db-bar-stage" style="width:<%= pct %>%;"></div></div>
-              </td>
-            </tr>
-          <% end %>
-        </tbody>
-      </table>
-    </div>
-
-    <!-- 알림 -->
+    <!-- 알림 (좌측) -->
     <div class="db-card">
       <%
-        grouped_alerts = alerts.group_by { |a| a[:parent_id] }
-        # Determine worst alert type per issue for row styling
-        type_priority = { 'past_dev_deadline' => 0, 'overdue_descendants' => 1, 'not_started' => 2, 'no_due_date' => 3 }
+        grouped_alerts = alerts.group_by { |a| a[:parent_id] }.sort_by { |_, list|
+          -list.sum { |a| a[:count].to_i + a[:overdue_count].to_i }
+        }
+        stats_by_id = roadmap.each_with_object({}) { |r, h| h[r[:id]] = r[:descendant_stats] }
       %>
       <h3>알림 <span class="db-count"><%= grouped_alerts.size %></span></h3>
       <% if alerts.any? %>
         <ul class="db-alert-list">
           <% grouped_alerts.each do |parent_id, issue_alerts| %>
-            <% worst_type = issue_alerts.min_by { |a| type_priority[a[:type]] || 99 }[:type] %>
-            <li class="db-alert db-alert-<%= worst_type %>">
-              <%= link_to "##{parent_id}", issue_path(parent_id) %>
+            <%
+              s = stats_by_id[parent_id] || {}
+              total = s[:total].to_i
+              has_dev_deadline_risk = issue_alerts.any? { |a| a[:type] == 'past_dev_deadline' }
+              overdue_pct = total > 0 ? (s[:overdue].to_i + s[:not_started].to_i) * 100.0 / total : 0
+              no_date_pct = total > 0 ? s[:no_due_date].to_i * 100.0 / total : 0
+              alert_level = if has_dev_deadline_risk
+                             'red'
+                           elsif overdue_pct >= 10
+                             'orange'
+                           elsif no_date_pct >= 10
+                             'yellow'
+                           else
+                             'default'
+                           end
+            %>
+            <%
+              s = stats_by_id[parent_id] || {}
+              alert_filter_url = ->(ids_key) {
+                ids = s[ids_key].to_s
+                ids.present? ? issues_path(set_filter: 1, "f[]": "issue_id", "op[issue_id]": "=", "v[issue_id][]": ids) : nil
+              }
+            %>
+            <li class="db-alert db-alert-<%= alert_level %>">
+              <%= link_to "##{parent_id}", issue_path(parent_id), "data-issue-tooltip": parent_id %>
               <strong><%= issue_alerts.first[:subject].truncate(40) %></strong>
               —
               <%
-                tips = []
+                parts = []
                 issue_alerts.each do |a|
                   case a[:type]
-                  when 'past_dev_deadline' then tips << "마감초과 #{a[:count]}건"
-                  when 'overdue_descendants' then tips << "기한초과 #{a[:overdue_count]}건"
-                  when 'not_started' then tips << "미개시 #{a[:count]}건"
-                  when 'no_due_date' then tips << "일정없음 #{a[:count]}건"
+                  when 'past_dev_deadline'
+                    url = alert_filter_url.(:ids_past_dev_deadline)
+                    parts << "마감초과 #{url ? link_to(raw("<span class='db-alert-num'>#{a[:count]}건</span>"), url) : "#{a[:count]}건"}"
+                  when 'overdue_descendants'
+                    url = alert_filter_url.(:ids_overdue)
+                    parts << "기한초과 #{url ? link_to(raw("<span class='db-alert-num'>#{a[:overdue_count]}건</span>"), url) : "#{a[:overdue_count]}건"}"
+                  when 'not_started'
+                    url = alert_filter_url.(:ids_not_started)
+                    parts << "미개시 #{url ? link_to(raw("<span class='db-alert-num'>#{a[:count]}건</span>"), url) : "#{a[:count]}건"}"
+                  when 'no_due_date'
+                    url = alert_filter_url.(:ids_no_due_date)
+                    parts << "일정없음 #{url ? link_to(raw("<span class='db-alert-num'>#{a[:count]}건</span>"), url) : "#{a[:count]}건"}"
                   end
                 end
               %>
-              <%= tips.join(', ') %>
+              <%= raw parts.join(', ') %>
             </li>
           <% end %>
         </ul>
@@ -126,21 +143,208 @@
         <p class="db-empty">알림 없음</p>
       <% end %>
     </div>
+
+    <!-- BUG 해결 추이 (우측) -->
+    <div class="db-card">
+      <h3>BUG 해결 추이</h3>
+      <% if @issues_by_days.present? %>
+        <%
+          today_remaining_bugs = (@rest_issue_count_per_category || {})['BUG'] || 0
+          bug_data = []
+          remaining_bugs = today_remaining_bugs
+          @issues_by_days.each do |day_data|
+            bug_category = day_data[:issues_by_category]['BUG']
+            created = bug_category ? bug_category[:created] : 0
+            completed = bug_category ? bug_category[:completed] : 0
+            date = day_data[:day]
+            date_type = if defined?(TxBaseHelper::HolidayApi) && TxBaseHelper::HolidayApi.available? && TxBaseHelper::HolidayApi.holiday?(date)
+                          'holiday'
+                        elsif date.sunday?
+                          'sunday'
+                        elsif date.saturday?
+                          'saturday'
+                        else
+                          'weekday'
+                        end
+            bug_data << { date: date.strftime('%m-%d'), created: created, completed: completed, remaining: remaining_bugs, date_type: date_type }
+            remaining_bugs = remaining_bugs + completed - created
+          end
+          bug_data.reverse!
+          fixing_bugs = @all_bug_issues ? @all_bug_issues.select { |i| i.end_time.nil? && i.begin_time.present? && i.begin_time >= 3.days.ago && i.updated_on >= 3.days.ago } : []
+        %>
+        <canvas id="dbBugTrendChart" height="130"></canvas>
+        <script>
+        (function() {
+          function renderBugTrend() {
+            const bugData = <%= raw bug_data.to_json %>;
+            const labels = bugData.map(d => d.date);
+            const created = bugData.map(d => d.created);
+            const completed = bugData.map(d => d.completed);
+            const remaining = bugData.map(d => d.remaining);
+            const dateTypes = bugData.map(d => d.date_type);
+            const fixingCount = <%= fixing_bugs.size %>;
+
+            const valueLabelPlugin = {
+              id: 'dbValueLabel',
+              afterDatasetsDraw(chart) {
+                const ctx = chart.ctx;
+                const ds = chart.data.datasets;
+                if (ds.length < 3) return;
+                const metaLine0 = chart.getDatasetMeta(0);
+                const metaLine1 = chart.getDatasetMeta(1);
+                const metaBar = chart.getDatasetMeta(2);
+                const yLine = chart.scales.y;
+                const yBar = chart.scales[ds[2].yAxisID || 'y'];
+                if (!yLine || !yBar) return;
+                const count = Math.max(ds[0].data.length, ds[1].data.length, ds[2].data.length);
+                ctx.save();
+                ctx.font = 'bold 10px sans-serif';
+                ctx.textAlign = 'center';
+                ctx.textBaseline = 'bottom';
+                for (let i = 0; i < count; i++) {
+                  const x = (metaLine0.data[i] && metaLine0.data[i].x) || 0;
+                  const vC = ds[0].data[i] || 0, vR = ds[1].data[i] || 0, vB = ds[2].data[i] || 0;
+                  if (!vC && !vR && !vB) continue;
+                  const items = [];
+                  if (vB) items.push({ t: String(vB), y: yBar.getPixelForValue(vB) - 4, c: ds[2].borderColor });
+                  if (vC) items.push({ t: String(vC), y: yLine.getPixelForValue(vC) - 4, c: ds[0].borderColor });
+                  if (vR) items.push({ t: String(vR), y: yLine.getPixelForValue(vR) - 4, c: ds[1].borderColor });
+                  items.sort((a, b) => a.y - b.y);
+                  for (let k = 1; k < items.length; k++) {
+                    if (items[k].y - items[k-1].y < 12) items[k].y = items[k-1].y + 12;
+                  }
+                  items.forEach(l => {
+                    ctx.strokeStyle = 'rgba(255,255,255,0.9)';
+                    ctx.lineWidth = 3;
+                    ctx.strokeText(l.t, x, l.y);
+                    ctx.fillStyle = l.c;
+                    ctx.fillText(l.t, x, l.y);
+                  });
+                }
+                ctx.restore();
+              }
+            };
+
+            new Chart(document.getElementById('dbBugTrendChart'), {
+              type: 'line',
+              data: {
+                labels: labels,
+                datasets: [
+                  { label: '생성', data: created, borderColor: 'rgb(255,99,132)', backgroundColor: 'rgba(255,99,132,0.1)', tension: 0.1, fill: false },
+                  { label: '해결', data: completed, borderColor: 'rgb(54,162,235)', backgroundColor: 'rgba(54,162,235,0.1)', tension: 0.1, fill: false },
+                  { label: '잔여', data: remaining, backgroundColor: 'rgba(255,206,86,0.6)', borderColor: 'rgb(255,206,86)', borderWidth: 1, type: 'bar', yAxisID: 'y1', barPercentage: 0.3 }
+                ]
+              },
+              plugins: [valueLabelPlugin],
+              options: {
+                responsive: true,
+                plugins: { legend: { position: 'top', labels: { boxWidth: 12, font: { size: 11 } } } },
+                scales: {
+                  y: { beginAtZero: true, position: 'left', title: { display: false }, max: Math.max(...created, ...completed) * 1.3 || 10 },
+                  y1: { beginAtZero: true, position: 'right', title: { display: false }, grid: { drawOnChartArea: false }, max: Math.max(...remaining) * 1.3 || 10 },
+                  x: { ticks: { font: { size: 10 }, maxRotation: 45, color: function(ctx) {
+                    var t = dateTypes[ctx.index];
+                    if (t === 'sunday' || t === 'holiday') return 'rgb(255,0,0)';
+                    if (t === 'saturday') return 'rgb(0,0,255)';
+                    return 'rgb(102,102,102)';
+                  } } }
+                },
+                interaction: { intersect: false, mode: 'index' }
+              }
+            });
+          }
+          if (window.Chart) { renderBugTrend(); }
+          else {
+            const s = document.createElement('script');
+            s.src = 'https://cdn.jsdelivr.net/npm/chart.js';
+            s.onload = renderBugTrend;
+            document.head.appendChild(s);
+          }
+        })();
+        </script>
+      <% else %>
+        <p class="db-empty">BUG 데이터 없음</p>
+      <% end %>
+    </div>
   </div>
 
-  <!-- 기타 일감 현황 -->
-  <% if other[:total] > 0 %>
-    <div class="db-card db-card-full">
-      <h3>기타 일감 (로드맵 외)</h3>
-      <div class="db-inline-stats">
-        <span>전체: <strong><%= other[:total] %></strong></span>
-        <span>진행중: <strong><%= other[:open] %></strong></span>
-        <% if other[:overdue] > 0 %>
-          <span class="db-label-overdue">기한초과: <strong><%= other[:overdue] %></strong></span>
-        <% end %>
-      </div>
+  <div class="db-grid">
+    <!-- 담당자 리스크 Top 5 -->
+    <div class="db-card">
+      <% if @overview[:assignee_risk_top].present? && @overview[:assignee_risk_top].any? { |r| r[:total] > 0 } %>
+        <h3>담당자별 리스크 Top 5 (기한초과 + 미개시)</h3>
+        <table class="list db-issue-table">
+          <thead>
+            <tr>
+              <th>담당자</th>
+              <th style="text-align:center">기한초과</th>
+              <th style="text-align:center">미개시</th>
+              <th style="text-align:center">합계</th>
+            </tr>
+          </thead>
+          <tbody>
+            <% @overview[:assignee_risk_top].each do |r| %>
+              <% next if r[:total] == 0 %>
+              <tr>
+                <td><%= r[:name] %></td>
+                <td style="text-align:center">
+                  <% if r[:overdue] > 0 %>
+                    <span class="db-num-alert"><%= link_to r[:overdue], issues_path(
+                      set_filter: 1, "f[]": "issue_id", "op[issue_id]": "=",
+                      "v[issue_id][]": r[:ids_overdue]
+                    ) %></span>
+                  <% else %>
+                    0
+                  <% end %>
+                </td>
+                <td style="text-align:center">
+                  <% if r[:not_started] > 0 %>
+                    <span class="db-num-orange"><%= link_to r[:not_started], issues_path(
+                      set_filter: 1, "f[]": "issue_id", "op[issue_id]": "=",
+                      "v[issue_id][]": r[:ids_not_started]
+                    ) %></span>
+                  <% else %>
+                    0
+                  <% end %>
+                </td>
+                <td style="text-align:center">
+                  <strong><%= link_to r[:total], issues_path(
+                    set_filter: 1, "f[]": "issue_id", "op[issue_id]": "=",
+                    "v[issue_id][]": r[:ids]
+                  ) %></strong>
+                </td>
+              </tr>
+            <% end %>
+          </tbody>
+        </table>
+      <% else %>
+        <h3>담당자별 리스크 Top 5</h3>
+        <p class="db-empty">리스크 없음</p>
+      <% end %>
     </div>
-  <% end %>
+
+    <!-- 기타 일감 현황 -->
+    <div class="db-card">
+      <h3>기타 일감 (로드맵 외)</h3>
+      <% if other[:total] > 0 %>
+        <%
+          other_url = ->(ids_key) {
+            ids = other[ids_key].to_s
+            ids.present? ? issues_path(set_filter: 1, "f[]": "issue_id", "op[issue_id]": "=", "v[issue_id][]": ids) : nil
+          }
+        %>
+        <div class="db-inline-stats">
+          <span>전체: <strong><%= other[:ids_total].present? ? link_to(other[:total], other_url.(:ids_total)) : other[:total] %></strong></span>
+          <span>진행중: <strong><%= other[:ids_open].present? ? link_to(other[:open], other_url.(:ids_open)) : other[:open] %></strong></span>
+          <% if other[:overdue] > 0 %>
+            <span class="db-label-overdue">기한초과: <strong><%= other[:ids_overdue].present? ? link_to(other[:overdue], other_url.(:ids_overdue)) : other[:overdue] %></strong></span>
+          <% end %>
+        </div>
+      <% else %>
+        <p class="db-empty">로드맵 외 일감 없음</p>
+      <% end %>
+    </div>
+  </div>
 
   <!-- 로드맵 일감 목록 -->
   <div class="db-card db-card-full">
@@ -172,8 +376,8 @@
             <% has_risk = stats[:past_dev_deadline].to_i > 0 %>
             <% is_done = r[:stage_code].to_i >= RedmineTxMilestone::SummaryService::STAGE_IMPLEMENTED %>
             <tr class="<%= 'db-row-risk' if has_risk && !is_done %> <%= 'db-row-overdue' if is_overdue && !is_done && !has_risk %> <%= 'db-row-closed' if is_done %>">
-              <td><%= link_to r[:id], issue_path(r[:id]) %></td>
-              <td class="db-subject"><%= link_to r[:subject].truncate(60), issue_path(r[:id]) %></td>
+              <td><%= link_to r[:id], issue_path(r[:id]), "data-issue-tooltip": r[:id] %></td>
+              <td class="db-subject"><%= link_to r[:subject].truncate(60), issue_path(r[:id]), "data-issue-tooltip": r[:id] %></td>
               <td><%= r.dig(:tracker, :name) %></td>
               <td><%= r.dig(:assigned_to, :name) || '-' %></td>
               <td><span class="db-stage-label"><%= r[:stage] %></span></td>
@@ -215,8 +419,8 @@
 <% end %>
 
 <style>
-.db-version-header { margin: 15px 0 10px; }
-.db-version-header h2 { margin: 0 0 6px; }
+.db-version-header { margin: 15px 0 10px; display: flex; align-items: center; justify-content: space-between; gap: 16px; flex-wrap: wrap; }
+.db-version-header h2 { margin: 0; white-space: nowrap; }
 .db-version-meta { display: flex; align-items: center; gap: 16px; color: #666; font-size: 0.9em; flex-wrap: wrap; }
 .db-badge { padding: 2px 8px; border-radius: 3px; font-size: 0.85em; font-weight: bold; color: #fff; }
 .db-badge-open { background: #28a745; }
@@ -231,17 +435,39 @@
   border-radius: 4px; padding: 10px 16px; margin: 0 0 16px; color: #856404; font-size: 0.95em;
 }
 
-.db-progress-section { display: flex; align-items: center; gap: 12px; margin: 10px 0 20px; }
-.db-progress-bar-container { flex: 1; height: 22px; background: #e9ecef; border-radius: 4px; overflow: visible; position: relative; }
-.db-progress-bar { height: 100%; background: #28a745; min-width: 0; transition: width 0.3s; display: flex; align-items: center; justify-content: center; border-radius: 4px; }
-.db-progress-text { color: #fff; font-size: 0.8em; font-weight: bold; white-space: nowrap; }
-.db-deadline-marker {
-  position: absolute; top: -4px; bottom: -4px; width: 2px;
-  background: #e67e22; z-index: 1;
+.db-done-ratio { font-size: 0.6em; font-weight: normal; color: #6c757d; }
+
+.db-timeline { margin: 8px 0 20px; }
+.db-timeline-bar {
+  position: relative; height: 24px; background: #e9ecef; border-radius: 6px;
+  margin: 28px 0 6px; overflow: visible;
 }
-.db-deadline-marker::after {
-  content: '▼'; position: absolute; top: -14px; left: -5px;
-  font-size: 10px; color: #e67e22;
+.db-timeline-progress {
+  height: 100%; background: #5b9bd5; border-radius: 6px 0 0 6px;
+  position: relative; z-index: 0; min-width: 0;
+}
+.db-timeline-today-label {
+  position: absolute; right: 4px; top: 50%; transform: translateY(-50%);
+  font-size: 0.7em; font-weight: bold; color: #fff; white-space: nowrap;
+}
+.db-timeline-mark {
+  position: absolute; top: -6px; bottom: -6px; width: 2px;
+  background: #6c757d; z-index: 1;
+}
+.db-timeline-mark-deadline { background: #e67e22; }
+.db-timeline-mark-label {
+  position: absolute; top: -14px; left: 50%; transform: translateX(-50%);
+  font-size: 0.65em; color: #6c757d; white-space: nowrap;
+}
+.db-timeline-mark-deadline .db-timeline-mark-label { color: #e67e22; font-weight: bold; }
+.db-timeline-mark-date {
+  position: absolute; bottom: -16px; left: 50%; transform: translateX(-50%);
+  font-size: 0.65em; color: #999; white-space: nowrap;
+}
+.db-timeline-mark-deadline .db-timeline-mark-date { color: #e67e22; }
+.db-timeline-edges {
+  display: flex; justify-content: space-between;
+  font-size: 0.75em; color: #999; margin-top: 2px;
 }
 
 .db-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; margin-bottom: 16px; }
@@ -270,10 +496,12 @@
 .db-alert-list { list-style: none; margin: 0; padding: 0; max-height: 300px; overflow-y: auto; }
 .db-alert { padding: 6px 0; border-bottom: 1px solid #f5f5f5; font-size: 0.9em; }
 .db-alert:last-child { border-bottom: none; }
-.db-alert-past_dev_deadline::before { content: "🟠 "; }
-.db-alert-overdue_descendants::before { content: "🔴 "; }
-.db-alert-not_started::before { content: "🔵 "; }
-.db-alert-no_due_date::before { content: "⚪ "; }
+.db-alert-red::before { content: "🔴 "; }
+.db-alert-orange::before { content: "🟠 "; }
+.db-alert-yellow::before { content: "🟡 "; }
+.db-alert-default::before { content: "⚪ "; }
+.db-alert-num { color: #dc3545; font-weight: bold; }
+.db-alert a .db-alert-num { color: #dc3545; }
 
 .db-inline-stats { display: flex; gap: 20px; font-size: 0.95em; }
 

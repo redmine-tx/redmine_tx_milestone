@@ -155,6 +155,7 @@ module RedmineTxMilestone
         today = Date.today
         alerts = []
         stage_counts = Hash.new(0)
+        assignee_risk = Hash.new { |h, k| h[k] = { overdue: [], not_started: [] } }
 
         roadmap_summaries = roadmap_issues.map do |rm|
           # All descendants, not just direct children
@@ -173,6 +174,10 @@ module RedmineTxMilestone
           no_due_date_work = open_work.select { |d| d.due_date.nil? }
           not_started_work = open_work.select { |d| d.start_date && d.start_date < today && d.status.respond_to?(:stage) && d.status.stage.to_i == STAGE_NEW }
           unassigned_work = open_work.select { |d| d.assigned_to.nil? }
+
+          # Per-assignee risk aggregation
+          overdue_work.each { |d| assignee_risk[d.assigned_to][:overdue] << d if d.assigned_to }
+          not_started_work.each { |d| assignee_risk[d.assigned_to][:not_started] << d if d.assigned_to }
 
           # Work leaves whose due_date exceeds dev deadline — risk to QA time
           past_dev_deadline = if dev_deadline
@@ -272,19 +277,37 @@ module RedmineTxMilestone
             status: version.status,
             due_date: version.effective_date&.iso8601,
             dev_deadline: dev_deadline&.iso8601,
+            timeline_start: compute_timeline_start(version)&.iso8601,
             done_ratio: version.completed_percent,
             overdue: version.overdue?,
             behind_schedule: version.behind_schedule?,
             total_issues: all_issues.size,
+            marks: version.respond_to?(:marks) ? version.marks.map { |m| { date: m[:date]&.iso8601, name: m[:name], is_deadline: m[:is_deadline] } } : [],
           },
           roadmap_issues: sorted,
           other_issues: {
             total: schedule_others.size,
             open: other_open.size,
-            overdue: other_overdue.size
+            overdue: other_overdue.size,
+            ids_total: schedule_others.map(&:id).join(','),
+            ids_open: other_open.map(&:id).join(','),
+            ids_overdue: other_overdue.map(&:id).join(','),
           },
           stage_summary: stage_counts,
-          alerts: alerts
+          alerts: alerts,
+          assignee_risk_top: assignee_risk
+            .map { |user, data|
+              overdue_ids = data[:overdue].map(&:id)
+              not_started_ids = data[:not_started].map(&:id)
+              { name: user.name, id: user.id,
+                overdue: overdue_ids.size, not_started: not_started_ids.size,
+                total: overdue_ids.size + not_started_ids.size,
+                ids_overdue: overdue_ids.join(','),
+                ids_not_started: not_started_ids.join(','),
+                ids: (overdue_ids + not_started_ids).uniq.join(',') }
+            }
+            .sort_by { |r| -r[:total] }
+            .first(5)
         }
       rescue ActiveRecord::RecordNotFound
         { error: "Version not found" }
@@ -433,6 +456,21 @@ module RedmineTxMilestone
           closed_on: issue.closed_on&.iso8601,
           tip: tip_fields(issue)
         }
+      end
+
+      # Timeline start: previous version's effective_date closest to (but before) earliest mark date
+      def compute_timeline_start(version)
+        return nil unless version.respond_to?(:marks) && version.marks.any?
+
+        earliest_mark = version.marks.map { |m| m[:date] }.compact.min
+        return nil unless earliest_mark
+
+        prev = version.project.versions
+                 .where('effective_date < ?', earliest_mark)
+                 .order(effective_date: :desc)
+                 .first
+
+        prev&.effective_date || earliest_mark
       end
 
       # ─── Classification helpers ────────────────────────────────

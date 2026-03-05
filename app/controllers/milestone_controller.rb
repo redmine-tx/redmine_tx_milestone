@@ -37,6 +37,12 @@ class MilestoneController < ApplicationController
 
       if @selected_version_id
         @overview = RedmineTxMilestone::SummaryService.dashboard_overview(@selected_version_id)
+
+        cache_key = "milestone/dashboard_bugs/#{@project.id}/#{@selected_version_id}/#{Date.today}"
+        @issues_by_days, @rest_issue_count_per_category, _, _, @all_bug_issues, _ =
+          Rails.cache.fetch(cache_key, expires_in: 5.minutes) do
+            process_bugs_data(Date.today, @selected_version_id)
+          end
       end
     end
 
