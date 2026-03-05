@@ -146,7 +146,7 @@
 
     <!-- BUG 해결 추이 (우측) -->
     <div class="db-card">
-      <h3><%= link_to 'BUG 해결 추이', project_milestone_report_bugs_path(@project, version_id: @selected_version_id) %></h3>
+      <h3><%= link_to 'BUG 해결 추이', report_bugs_project_milestone_index_path(@project, version_id: @selected_version_id) %></h3>
       <% if @issues_by_days.present? %>
         <%
           today_remaining_bugs = (@rest_issue_count_per_category || {})['BUG'] || 0
