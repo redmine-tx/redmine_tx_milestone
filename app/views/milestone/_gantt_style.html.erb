@@ -109,7 +109,7 @@
     position: absolute; /* gantt-grid 기준 절대 위치 */
     border-left: 1px dashed #ff4444; /* 왼쪽에 점선 테두리 */
     height: 100%; /* 부모 요소 높이만큼 채움 */
-    z-index: 10; /* 다른 요소들 위에 표시 (task-bar보다는 아래) */
+    z-index: 11; /* mark-column(10)보다 위에 표시 */
   }
 
   /* mark-column: 특정 날짜 표시 컬럼 (마일스톤 등) */
@@ -127,6 +127,15 @@
     color: #4444ff;
     z-index: 10; /* mark-column과 동일 레벨 */
     white-space: nowrap; /* 텍스트 줄 바꿈 방지 */
+  }
+
+  /* mark-deadline: 마감일 마크 강조 */
+  .gantt-wrapper .mark-column.mark-deadline {
+    border-left: 2px solid #cc0000;
+  }
+  .gantt-wrapper .mark-text.mark-deadline {
+    color: #cc0000;
+    font-weight: bold;
   }
 
   /* blocked-grid: 차단된 기간 표시 (예: 주말, 공휴일) */
@@ -351,6 +360,17 @@
   .gantt-wrapper .icon-paused { color: #f90; }
   .gantt-wrapper .icon-implemented { color: #0c0; font-weight: bold; }
   .gantt-wrapper .icon-discarded { color: #666; font-weight: bold; }
+
+  /* 컨텍스트 메뉴 선택 하이라이트 (display:contents 대응) */
+  .gantt-wrapper .task-row.context-menu-selection > .task-name,
+  .gantt-wrapper .task-row.context-menu-selection > .assignee {
+    background-color: #507AAA !important;
+    color: white !important;
+  }
+  .gantt-wrapper .task-row.context-menu-selection > .task-name a,
+  .gantt-wrapper .task-row.context-menu-selection > .assignee a {
+    color: white !important;
+  }
 
   /* Depth 들여쓰기 */
   .gantt-wrapper .depth-indent { color: #aaa; }

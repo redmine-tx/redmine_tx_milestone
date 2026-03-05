@@ -13,6 +13,7 @@ post 'predict/issues/:issue_id/apply', to: 'milestone#apply_predict_issue'
 resources :projects do
   resources :milestone, :controller => 'milestone', :as => 'milestone' do
     collection do
+      get 'dashboard', to: 'milestone#dashboard'
       # version_id를 사용한 새로운 라우트 추가
       get 'gantt/versions/:version_id', to: 'milestone#gantt'
       get 'gantt/issues/:issue_id', to: 'milestone#gantt'

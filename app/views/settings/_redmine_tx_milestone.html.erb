@@ -17,12 +17,14 @@
       <tr>
         <th>마감 ?일전</th>
         <th>제목</th>
+        <th>마감일</th>
         <th class="buttons"></th>
       </tr>
     </thead>
     <tbody>
       <% deadlines = RedmineTxMilestone::SettingsMigration.get_deadlines(@settings) %>
-      <% deadlines.each do |deadline| %>
+      <% dev_complete_index = (@settings['setting_milestone_dev_complete_index'] || '0').to_i %>
+      <% deadlines.each_with_index do |deadline, idx| %>
       <tr class="deadline-entry">
         <td>
           <%= number_field_tag "settings[setting_milestone_deadlines][][days]",
@@ -32,13 +34,17 @@
           <%= text_field_tag "settings[setting_milestone_deadlines][][title]",
                              deadline['title'], id: nil, size: 30 %>
         </td>
+        <td class="deadline-radio">
+          <%= radio_button_tag "settings[setting_milestone_dev_complete_index]",
+                               idx, idx == dev_complete_index %>
+        </td>
         <td class="buttons">
           <a href="#" class="delete-deadline icon-only icon-del" title="삭제"><%= sprite_icon('del', '삭제') %></a>
         </td>
       </tr>
       <% end %>
       <tr>
-        <td colspan="2"></td>
+        <td colspan="3"></td>
         <td class="buttons">
           <a href="#" class="add-deadline icon-only icon-add" title="추가"><%= sprite_icon('add', '추가') %></a>
         </td>
@@ -95,12 +101,23 @@
 $(function() {
   var $tbody = $('#milestone-deadlines tbody');
 
+  function reindexRadios() {
+    $tbody.find('.deadline-entry').each(function(i) {
+      $(this).find('.deadline-radio input[type="radio"]').val(i);
+    });
+  }
+
   // 행 삭제
   $tbody.on('click', '.delete-deadline', function(e) {
     e.preventDefault();
     // 최소 1개 행 유지
     if ($tbody.find('.deadline-entry').length > 1) {
+      var wasChecked = $(this).closest('tr').find('input[type="radio"]').is(':checked');
       $(this).closest('tr').remove();
+      if (wasChecked) {
+        $tbody.find('.deadline-entry:first input[type="radio"]').prop('checked', true);
+      }
+      reindexRadios();
     }
   });
 
@@ -111,9 +128,11 @@ $(function() {
   // 행 추가
   $tbody.on('click', '.add-deadline', function(e) {
     e.preventDefault();
+    var nextIndex = $tbody.find('.deadline-entry').length;
     var newRow = '<tr class="deadline-entry">' +
       '<td><input type="number" name="settings[setting_milestone_deadlines][][days]" value="" size="10" min="1"></td>' +
       '<td><input type="text" name="settings[setting_milestone_deadlines][][title]" value="" size="30"></td>' +
+      '<td class="deadline-radio"><input type="radio" name="settings[setting_milestone_dev_complete_index]" value="' + nextIndex + '"></td>' +
       '<td class="buttons"><a href="#" class="delete-deadline icon-only icon-del" title="삭제">' +
       deleteIconHtml + '</a></td>' +
       '</tr>';

@@ -6,6 +6,7 @@
 <div class="tabs tabs-wrap">
   <ul>
     <li><%= link_to '🏠 시작', '/projects/' + params[:project_id].to_s + '/milestone', class: action_name == 'index' ? 'selected' : '' %></li>
+    <li><%= link_to '📈 대시보드', '/projects/' + params[:project_id].to_s + '/milestone/dashboard', class: action_name == 'dashboard' ? 'selected' : '' %></li>
     <li><%= link_to '📊 간트차트', '/projects/' + params[:project_id].to_s + '/milestone/gantt', class: action_name == 'gantt' ? 'selected' : '' %></li>
     <li><%= link_to '📋 일정요약', '/projects/' + params[:project_id].to_s + '/milestone/schedule_summary', class: action_name == 'schedule_summary' ? 'selected' : '' %></li>
     <li><%= link_to '👥 작업 현황(부서)', '/projects/' + params[:project_id].to_s + '/milestone/group_detail', class: action_name == 'group_detail' ? 'selected' : '' %></li>

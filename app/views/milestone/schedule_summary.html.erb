@@ -153,7 +153,9 @@ all_groups = Group.all.reject { |group| excluded_group_ids.include?(group.id) }
   version_markers = []
   versions.each do |version|
     version.marks.each do |mark|
-      version_markers << { date: mark[:date], name: mark[:name], color: '#9999ff', side: 'right' }
+      mark_color = mark[:is_deadline] ? '#cc0000' : '#9999ff'
+      mark_line_style = mark[:is_deadline] ? 'solid' : 'dashed'
+      version_markers << { date: mark[:date], name: mark[:name], color: mark_color, side: 'right', lineStyle: mark_line_style }
     end
     version_markers << { date: version.effective_date, name: version.name, color: '#5555cc', side: 'right' }
   end

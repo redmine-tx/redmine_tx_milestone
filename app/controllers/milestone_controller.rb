@@ -27,6 +27,19 @@ class MilestoneController < ApplicationController
       
     end
 
+    def dashboard
+      version_id_param = params[:version_id]
+      @selected_version_id = if version_id_param.present? && version_id_param != 'all'
+                               version_id_param.to_i
+                             else
+                               @project&.default_version&.id
+                             end
+
+      if @selected_version_id
+        @overview = RedmineTxMilestone::SummaryService.dashboard_overview(@selected_version_id)
+      end
+    end
+
     def gantt
     end
 

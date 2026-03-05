@@ -372,25 +372,27 @@ module RedmineTxMilestoneHelper
     def marks
       return [] unless effective_date
       date_marks = []
-      deadlines = RedmineTxMilestone::SettingsMigration.get_deadlines(
-        Setting[:plugin_redmine_tx_milestone]
-      )
-      deadlines.each do |deadline|
+      settings = Setting[:plugin_redmine_tx_milestone]
+      deadlines = RedmineTxMilestone::SettingsMigration.get_deadlines(settings)
+      dev_complete_index = (settings['setting_milestone_dev_complete_index'] || '0').to_i
+      deadlines.each_with_index do |deadline, idx|
         days = deadline['days']
         title = deadline['title']
         next if days.blank?
 
         date = (effective_date - days.to_i.days).to_date
-        date_marks.push({ date: date, name: title })
+        date_marks.push({ date: date, name: title, is_deadline: idx == dev_complete_index })
       end
 
       # 데이터 타입이 날짜 타입인 커스텀 필드가 있으면 해당 값도 추가
       self.custom_field_values.each do |custom_field_value|
         if custom_field_value.custom_field.field_format == 'date' && custom_field_value.value.present?
+          existing = date_marks.find { |dm| dm[:name] == custom_field_value.custom_field.name }
           date_marks.delete_if { |dm| dm[:name] == custom_field_value.custom_field.name }
-          date_marks.push({ 
-            date: custom_field_value.value.to_date, 
-            name: custom_field_value.custom_field.name 
+          date_marks.push({
+            date: custom_field_value.value.to_date,
+            name: custom_field_value.custom_field.name,
+            is_deadline: existing ? existing[:is_deadline] : false
           })
         end
       end

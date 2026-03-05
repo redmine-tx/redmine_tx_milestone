@@ -29,12 +29,14 @@ Redmine::Plugin.register :redmine_tx_milestone do
       { 'days' => '7', 'title' => '마감 1주전' },
       { 'days' => '14', 'title' => '마감 2주전' }
     ],
+    'setting_milestone_dev_complete_index' => '0',
     'setting_milestone_use_redmine_auto_schedule' => 'false'
   }, :partial => 'settings/redmine_tx_milestone'
 end
 
 Rails.application.config.after_initialize do
   require_dependency File.expand_path('../lib/redmine_tx_milestone/settings_migration', __FILE__)
+  require_dependency File.expand_path('../lib/redmine_tx_milestone/summary_service', __FILE__)
   require_dependency File.expand_path('../lib/redmine_tx_milestone_helper', __FILE__)
 
   # 플러그인 로드 시 이전 형식 → 새 형식 자동 마이그레이션

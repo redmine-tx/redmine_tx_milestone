@@ -70,6 +70,7 @@
 
 <% gantt_container_id = "gantt-container-#{rand(1000000)}" %>
 
+<%= form_tag({}, data: { cm_url: issues_context_menu_path }) do %>
 <div class="gantt-wrapper mouseover-wrapper-<%=gantt_container_id%>" style="display: flex; position: relative;">
   <div class="cursor-container-<%=gantt_container_id%>" style="top: 36px; height: <%=cell_height%>px;"></div>
   
@@ -92,6 +93,7 @@
             %>
 
             <div id="issue-<%= issue.id %>" class="task-row mouseover-<%=gantt_container_id%> hascontextmenu">
+                <input type="checkbox" name="ids[]" value="<%= issue.id %>" style="display:none" />
 
                 <div class="task-name priority-<%= issue.priority_id %>" style="height: <%=cell_height%>px;">
                 <% subject_class = gantt_issue_css_class(issue) %>
@@ -214,10 +216,12 @@
         <% date_marks.each_with_index do |data, index|
           _value = data[:name]
           _date = data[:date]
+          _is_deadline = data[:is_deadline]
+          _mark_class = _is_deadline ? ' mark-deadline' : ''
           %>
           <% mark_index = ( _date - start_date ).to_i + 1 %>
-            <div class="mark-text" style="left: <%= 3 + (mark_index * cell_width) %>px; top: <%= index * cell_height + cell_height * 2.2 %>px;"><%= _value %></div>
-            <div class="mark-column" style="left: <%= (mark_index * cell_width) %>px;top: <%=cell_height + 1 %>px"></div>
+            <div class="mark-text<%= _mark_class %>" style="left: <%= 3 + (mark_index * cell_width) %>px; top: <%= index * cell_height + cell_height * 2.2 %>px;"><%= _value %></div>
+            <div class="mark-column<%= _mark_class %>" style="left: <%= (mark_index * cell_width) %>px;top: <%=cell_height + 1 %>px"></div>
         <% end %>
       <% end %>
 
@@ -341,8 +345,9 @@
     </div>
   </div>
 </div>
+<% end %>
 
-<%# end %>
+<%= context_menu %>
 
 <script>
   $(document).ready(function() {
@@ -396,6 +401,28 @@
 
   // 툴팁 기능
   //setupTooltip();
+
+    // 간트 차트 우측 영역 컨텍스트 메뉴 지원
+    $wrapper.on('contextmenu', '[data-issue-tooltip]', function(event) {
+      var target = $(event.target);
+      if (target.is('a:not(.js-contextmenu)')) return;
+
+      var issueId = $(this).data('issue-tooltip');
+      if (!issueId) return;
+
+      var tr = $wrapper.find('#issue-' + issueId + '.hascontextmenu');
+      if (tr.length < 1) return;
+
+      event.preventDefault();
+      event.stopPropagation();
+
+      if (!contextMenuIsSelected(tr)) {
+        contextMenuUnselectAll();
+        contextMenuAddSelection(tr);
+        contextMenuSetLastSelected(tr);
+      }
+      contextMenuShow(event);
+    });
 
 });
 </script>
