@@ -299,7 +299,7 @@ module RedmineTxMilestone
             .map { |user, data|
               overdue_ids = data[:overdue].map(&:id)
               not_started_ids = data[:not_started].map(&:id)
-              { name: user.name, id: user.id,
+              { name: user.name, id: user.id, type: user.class.name.downcase,
                 overdue: overdue_ids.size, not_started: not_started_ids.size,
                 total: overdue_ids.size + not_started_ids.size,
                 ids_overdue: overdue_ids.join(','),
