@@ -37,6 +37,12 @@ class MilestoneController < ApplicationController
 
       if @selected_version_id
         cache_base = "milestone/dashboard/#{@project.id}/#{@selected_version_id}/#{Date.today}"
+        force = params[:force] == 'true'
+
+        if force
+          Rails.cache.delete("#{cache_base}/overview")
+          Rails.cache.delete("#{cache_base}/bugs")
+        end
 
         @overview = Rails.cache.fetch("#{cache_base}/overview", expires_in: 1.hour) do
           RedmineTxMilestone::SummaryService.dashboard_overview(@selected_version_id)
@@ -52,7 +58,9 @@ class MilestoneController < ApplicationController
           bug_data = build_bug_data_for_ai(@overview, @selected_version_id)
           digest_source = @overview.to_json + (bug_data ? bug_data.to_json : '')
           overview_digest = Digest::SHA256.hexdigest(digest_source)[0..15]
-          @ai_summary = Rails.cache.fetch("milestone/ai_summary/#{@project.id}/#{@selected_version_id}/#{overview_digest}", expires_in: 1.day) do
+          ai_cache_key = "milestone/ai_summary/#{@project.id}/#{@selected_version_id}/#{overview_digest}"
+          Rails.cache.delete(ai_cache_key) if force
+          @ai_summary = Rails.cache.fetch(ai_cache_key, expires_in: 1.day) do
             RedmineTxMcp::LlmService.summarize(build_ai_summary_prompt(@overview, bug_data: bug_data))
           end
         end
