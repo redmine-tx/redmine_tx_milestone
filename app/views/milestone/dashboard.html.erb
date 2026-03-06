@@ -39,18 +39,9 @@
     </div>
   </div>
 
-  <!-- 개발마감 리스크 배너 -->
-  <% if dev_deadline && total_past > 0 %>
-    <div class="db-risk-banner">
-      <strong>개발마감 초과 리스크</strong> — 개발마감(<%= dev_deadline %>) 이후 완료 예정인 실무 일감 <strong><%= total_past %>건</strong>. QA 기간이 축소됩니다.
-    </div>
-  <% end %>
-
   <% if @ai_summary.present? %>
-  <!-- AI 현황 요약 -->
-  <div class="db-ai-summary">
-    <span class="db-ai-label">AI 요약</span>
-    <%= @ai_summary %>
+  <div class="db-risk-banner">
+    <span class="db-ai-label">AI 요약</span> <%= @ai_summary %>
   </div>
   <% end %>
 
@@ -440,16 +431,12 @@
 
 .db-risk-banner {
   background: #fff3cd; border: 1px solid #ffc107; border-left: 4px solid #e67e22;
-  border-radius: 4px; padding: 10px 16px; margin: 0 0 16px; color: #856404; font-size: 0.95em;
+  border-radius: 4px; padding: 10px 16px; margin: 0 0 16px; color: #856404; font-size: 1.0em; line-height: 1.7;
 }
 
-.db-ai-summary {
-  background: #f0f4ff; border: 1px solid #c5d5f5; border-left: 4px solid #5b9bd5;
-  border-radius: 4px; padding: 10px 16px; margin: 0 0 16px; color: #2c3e50; font-size: 0.93em; line-height: 1.6;
-}
 .db-ai-label {
-  display: inline-block; background: #5b9bd5; color: #fff; font-size: 0.75em; font-weight: bold;
-  padding: 1px 6px; border-radius: 3px; margin-right: 6px; vertical-align: middle;
+  display: inline-block; background: #b8860b; color: #fff; font-size: 0.75em; font-weight: bold;
+  padding: 1px 6px; border-radius: 3px; margin-right: 4px; vertical-align: middle;
 }
 
 .db-done-ratio { font-size: 0.75em; font-weight: normal; color: #6c757d; }
