@@ -87,19 +87,17 @@ module RedmineTxMilestone
         end
 
         # Assignee risk top 5
-        base_url = Setting.protocol + '://' + Setting.host_name
         if risk_top.present? && risk_top.any? { |r| r[:total] > 0 }
           lines << ""
           lines << "*담당자별 리스크 Top 5* (지연 + 미개시)"
           risk_top.each do |r|
             next if r[:total] == 0
-            path = r[:type] == 'group' ? 'groups' : 'users'
-            name_link = "<#{base_url}/#{path}/#{r[:id]}|#{r[:name]}>"
-            lines << "  #{name_link}: 지연 #{r[:overdue]}건, 미개시 #{r[:not_started]}건 (합계 #{r[:total]}건)"
+            lines << "  #{r[:name]}: 지연 #{r[:overdue]}건, 미개시 #{r[:not_started]}건 (합계 #{r[:total]}건)"
           end
         end
 
         # Dashboard link (returned separately as footer)
+        base_url = Setting.protocol + '://' + Setting.host_name
         dash_url = "#{base_url}/projects/#{project.identifier}/milestone/dashboard?version_id=#{overview[:version][:id]}"
         footer = "<#{dash_url}|:bar_chart: 대시보드 바로가기>"
 

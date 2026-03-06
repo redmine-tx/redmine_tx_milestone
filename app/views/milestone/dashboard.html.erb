@@ -379,7 +379,7 @@
               <td><%= link_to r[:id], issue_path(r[:id]), "data-issue-tooltip": r[:id] %></td>
               <td class="db-subject"><%= link_to r[:subject].truncate(60), issue_path(r[:id]), "data-issue-tooltip": r[:id] %></td>
               <td><%= r.dig(:tracker, :name) %></td>
-              <td><%= r.dig(:assigned_to, :name) || '-' %></td>
+              <td><%= r.dig(:assigned_to, :id) ? link_to(r.dig(:assigned_to, :name), user_path(r.dig(:assigned_to, :id))) : '-' %></td>
               <td><span class="db-stage-label"><%= r[:stage] %></span></td>
               <td>
                 <div class="db-mini-progress">
