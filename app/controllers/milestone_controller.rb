@@ -17,8 +17,8 @@ class MilestoneController < ApplicationController
     # layout false  # 레이아웃 없이 사용하려면
   
     before_action :require_login
-    before_action :find_project, except: [:issue_detail, :predict_issue, :apply_predict_issue]
-    before_action :authorize, except: [:issue_detail, :predict_issue, :apply_predict_issue]
+    before_action :find_project, except: [:issue_detail, :predict_issue, :apply_predict_issue, :test_summary_prompt]
+    before_action :authorize, except: [:issue_detail, :predict_issue, :apply_predict_issue, :test_summary_prompt]
     before_action :find_issue_for_predict, only: [:predict_issue, :apply_predict_issue]
   
     def index
@@ -56,13 +56,17 @@ class MilestoneController < ApplicationController
         # AI 현황 요약 — overview+bug 데이터 해시 기반 캐시
         if @overview && !@overview[:error] && defined?(RedmineTxMcp::LlmService) && RedmineTxMcp::LlmService.available?
           bug_data = build_bug_data_for_ai(@overview, @selected_version_id)
-          custom_prompt = (Setting.plugin_redmine_tx_mcp rescue {}).slice('use_custom_summary_prompt', 'custom_summary_prompt').to_json
-          digest_source = @overview.to_json + (bug_data ? bug_data.to_json : '') + custom_prompt
+          mcp_settings = Setting.plugin_redmine_tx_mcp rescue {}
+          llm_provider = mcp_settings['llm_provider'] || 'anthropic'
+          llm_model = llm_provider == 'openai' ? (mcp_settings['openai_model'].presence || 'default') : (mcp_settings['claude_model'].presence || 'claude-sonnet-4-6')
+          custom_prompt = (Setting.plugin_redmine_tx_milestone rescue {}).slice('use_custom_summary_prompt', 'custom_summary_prompt').to_json
+          digest_source = @overview.to_json + (bug_data ? bug_data.to_json : '') + custom_prompt + "#{llm_provider}:#{llm_model}"
           overview_digest = Digest::SHA256.hexdigest(digest_source)[0..15]
           ai_cache_key = "milestone/ai_summary/#{@project.id}/#{@selected_version_id}/#{overview_digest}"
           Rails.cache.delete(ai_cache_key) if force
-          @ai_summary = Rails.cache.fetch(ai_cache_key, expires_in: 1.day) do
-            RedmineTxMcp::LlmService.summarize(build_ai_summary_prompt(@overview, bug_data: bug_data))
+          @ai_summary = Rails.cache.fetch(ai_cache_key, expires_in: 1.day, skip_nil: true) do
+            result = RedmineTxMcp::LlmService.summarize(build_ai_summary_prompt(@overview, bug_data: bug_data))
+            result.present? ? result : nil
           end
         end
       end
@@ -263,6 +267,56 @@ class MilestoneController < ApplicationController
       end
     end
 
+    def test_summary_prompt
+      return render json: { success: false, error: '관리자 권한이 필요합니다.' } unless User.current.admin?
+
+      unless defined?(RedmineTxMcp::LlmService) && RedmineTxMcp::LlmService.available?
+        return render json: { success: false, error: 'LLM 서비스를 사용할 수 없습니다. MCP 플러그인의 API 키를 확인해 주세요.' }
+      end
+
+      # 버전 찾기: 지정된 version_id 또는 일감 많은 프로젝트의 기본 버전
+      if params[:version_id].present?
+        version = Version.find_by(id: params[:version_id])
+        return render json: { success: false, error: '버전을 찾을 수 없습니다.' } unless version
+        project = version.project
+      else
+        project = Project.visible.has_module(:issue_tracking)
+                    .left_joins(:issues)
+                    .group('projects.id')
+                    .order('COUNT(issues.id) DESC')
+                    .first
+        return render json: { success: false, error: '프로젝트를 찾을 수 없습니다.' } unless project
+
+        version = project.default_version || project.versions.open.order(effective_date: :desc).first
+        return render json: { success: false, error: "프로젝트 '#{project.name}'에 열린 버전이 없습니다." } unless version
+      end
+
+      overview = RedmineTxMilestone::SummaryService.dashboard_overview(version.id)
+      return render json: { success: false, error: overview[:error] } if overview[:error]
+
+      # 폼에서 전달된 프롬프트로 임시 설정 오버라이드
+      test_prompt = params[:prompt].presence
+      if test_prompt
+        original = Setting.plugin_redmine_tx_milestone
+        Setting.plugin_redmine_tx_milestone = original.merge(
+          'use_custom_summary_prompt' => 'true',
+          'custom_summary_prompt' => test_prompt
+        )
+      end
+
+      full_prompt = build_ai_summary_prompt(overview, bug_data: nil)
+      result = RedmineTxMcp::LlmService.summarize(full_prompt)
+
+      render json: if result
+                     { success: true, summary: result, project: project.name, version: version.name }
+                   else
+                     { success: false, error: 'LLM 응답을 받지 못했습니다.' }
+                   end
+    ensure
+      # 설정 복원
+      Setting.plugin_redmine_tx_milestone = original if original
+    end
+
     private
 
     # 릴리즈 15일 이내일 때 버그 추이 데이터 수집
@@ -387,9 +441,9 @@ class MilestoneController < ApplicationController
       context = data_lines.join("\n")
 
       # 커스텀 프롬프트 설정 확인
-      mcp_settings = Setting.plugin_redmine_tx_mcp rescue {}
-      if mcp_settings['use_custom_summary_prompt'].to_s == '1' && mcp_settings['custom_summary_prompt'].present?
-        prompt = mcp_settings['custom_summary_prompt']
+      ms_settings = Setting.plugin_redmine_tx_milestone rescue {}
+      if ms_settings['use_custom_summary_prompt'] == 'true' && ms_settings['custom_summary_prompt'].present?
+        prompt = ms_settings['custom_summary_prompt']
       else
         total_work = roadmap.sum { |r| (r[:descendant_stats] || {})[:total].to_i }
         total_no_due = roadmap.sum { |r| (r[:descendant_stats] || {})[:no_due_date].to_i }

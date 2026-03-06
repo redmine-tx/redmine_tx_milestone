@@ -10,6 +10,8 @@ post 'predict/issues/:issue_id/apply', to: 'milestone#apply_predict_issue'
 # 프로젝트와 독립적인 issue_detail 라우트 추가
 #get 'issue_detail/:id', to: 'milestone#issue_detail'
 
+post 'milestone/test_summary_prompt', to: 'milestone#test_summary_prompt'
+
 resources :projects do
   resources :milestone, :controller => 'milestone', :as => 'milestone' do
     collection do

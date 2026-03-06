@@ -52,6 +52,60 @@
     </tbody>
   </table>
 
+  <br>
+
+  <h3>AI 일정요약 프롬프트</h3>
+  <p>
+    <input type="checkbox" name="settings[use_custom_summary_prompt]"
+           id="settings_use_custom_summary_prompt"
+           value="true"
+           <%= 'checked' if @settings['use_custom_summary_prompt'] == 'true' %>>
+    <label for="settings_use_custom_summary_prompt">커스텀 요약 프롬프트 사용</label>
+    <span class="description">체크 시 대시보드 AI 요약에 아래 프롬프트가 사용됩니다. 해제 시 내장 프롬프트가 사용됩니다.</span>
+  </p>
+  <% default_summary_prompt = <<~PROMPT.strip
+위 프로젝트 마일스톤 현황 데이터를 바탕으로 프로젝트 매니저에게 보고하는 간결한 현황 요약을 작성해 주세요.
+
+요구사항:
+- 5~10문장으로 핵심을 전달
+- 가장 심각한 리스크나 주의사항을 먼저 언급
+- 일정 미배정 일감이 많은 경우(30% 이상), 일정 리스크 판단 자체가 어려운 상황임을 최우선으로 강조하고, 일정 배정이 선행되어야 한다는 점을 명확히 언급
+- 전체적인 진행 상태에 대한 판단 포함
+- 주요 일정(빌드 전달일, 마감일 등)의 경과/잔여 상황을 고려하여 현재 시점의 위치를 판단
+- 잔여 작업일 정보가 포함된 경우, 실제 작업 가능 일수를 기반으로 일정 리스크를 판단
+- 버그 수정 추이가 포함된 경우, 릴리즈까지 버그 해소 전망도 언급
+- 마크다운 없이 평문으로 작성
+- 한국어로 작성
+PROMPT
+  %>
+  <% summary_prompt_value = @settings['custom_summary_prompt'].present? ? @settings['custom_summary_prompt'] : default_summary_prompt %>
+  <textarea name="settings[custom_summary_prompt]"
+            id="settings_custom_summary_prompt"
+            rows="12"
+            style="width: 100%; font-family: monospace;"><%= summary_prompt_value %></textarea>
+  <span class="description">데이터 컨텍스트 뒤에 이 프롬프트가 붙어 LLM에 전달됩니다.</span>
+
+  <div style="margin-top: 8px; display: flex; align-items: center; gap: 8px;">
+    <select id="test-summary-version">
+      <option value="">(자동 선택)</option>
+      <% Version.visible.open.includes(:project).order('projects.name ASC, versions.effective_date DESC').each do |v| %>
+        <option value="<%= v.id %>"><%= v.project.name %> — <%= v.name %></option>
+      <% end %>
+    </select>
+    <button type="button" id="test-summary-prompt" class="button">테스트</button>
+    <span id="test-summary-loading" style="display: none; color: #888;">요약 생성중...</span>
+  </div>
+
+</div>
+
+<div id="summary-test-modal" style="display:none; position:fixed; top:0; left:0; width:100%; height:100%; background:rgba(0,0,0,0.5); z-index:10000;">
+  <div style="position:absolute; top:50%; left:50%; transform:translate(-50%,-50%); background:#fff; border-radius:6px; padding:20px; width:700px; max-width:90vw; max-height:80vh; display:flex; flex-direction:column;">
+    <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:12px;">
+      <strong id="summary-test-title" style="font-size:14px;"></strong>
+      <a href="#" id="summary-test-close" style="font-size:18px; text-decoration:none; color:#888;">&times;</a>
+    </div>
+    <div id="summary-test-body" style="overflow-y:auto; white-space:pre-wrap; line-height:1.6; font-size:13px; flex:1;"></div>
+  </div>
 </div>
 
 <style>
@@ -137,6 +191,59 @@ $(function() {
       deleteIconHtml + '</a></td>' +
       '</tr>';
     $(this).closest('tr').before(newRow);
+  });
+
+  // ─── 커스텀 프롬프트 토글 ───
+  var $chk = $('#settings_use_custom_summary_prompt');
+  var $ta = $('#settings_custom_summary_prompt');
+  var $testBtn = $('#test-summary-prompt');
+
+  function togglePrompt() {
+    var on = $chk.is(':checked');
+    $ta.prop('disabled', !on).css('opacity', on ? 1 : 0.5);
+    $testBtn.prop('disabled', !on);
+  }
+  $chk.on('change', togglePrompt);
+  togglePrompt();
+
+  // ─── 테스트 버튼 ───
+  var $loading = $('#test-summary-loading');
+  var $modal = $('#summary-test-modal');
+
+  $testBtn.on('click', function() {
+    $testBtn.prop('disabled', true);
+    $loading.show();
+
+    $.ajax({
+      url: '<%= escape_javascript(url_for(controller: "milestone", action: "test_summary_prompt", only_path: true)) %>',
+      method: 'POST',
+      data: { prompt: $ta.val(), version_id: $('#test-summary-version').val(), authenticity_token: $('meta[name="csrf-token"]').attr('content') },
+      dataType: 'json',
+      success: function(data) {
+        if (data.success) {
+          $('#summary-test-title').text(data.project + ' / ' + data.version);
+          $('#summary-test-body').text(data.summary);
+        } else {
+          $('#summary-test-title').text('오류');
+          $('#summary-test-body').text(data.error);
+        }
+        $modal.show();
+      },
+      error: function(xhr) {
+        $('#summary-test-title').text('오류');
+        $('#summary-test-body').text('요청 실패: ' + xhr.status);
+        $modal.show();
+      },
+      complete: function() {
+        $loading.hide();
+        togglePrompt();
+      }
+    });
+  });
+
+  // 모달 닫기
+  $('#summary-test-close, #summary-test-modal').on('click', function(e) {
+    if (e.target === this) $modal.hide();
   });
 });
 </script>
