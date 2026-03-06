@@ -286,7 +286,7 @@
             <% @overview[:assignee_risk_top].each do |r| %>
               <% next if r[:total] == 0 %>
               <tr>
-                <td><%= r[:name] %></td>
+                <td><%= r[:id] ? link_to_principal(Principal.find(r[:id])) : r[:name] %></td>
                 <td style="text-align:center">
                   <% if r[:overdue] > 0 %>
                     <span class="db-num-alert"><%= link_to r[:overdue], issues_path(
