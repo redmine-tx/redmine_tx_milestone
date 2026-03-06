@@ -56,7 +56,8 @@ class MilestoneController < ApplicationController
         # AI 현황 요약 — overview+bug 데이터 해시 기반 캐시
         if @overview && !@overview[:error] && defined?(RedmineTxMcp::LlmService) && RedmineTxMcp::LlmService.available?
           bug_data = build_bug_data_for_ai(@overview, @selected_version_id)
-          digest_source = @overview.to_json + (bug_data ? bug_data.to_json : '')
+          custom_prompt = (Setting.plugin_redmine_tx_mcp rescue {}).slice('use_custom_summary_prompt', 'custom_summary_prompt').to_json
+          digest_source = @overview.to_json + (bug_data ? bug_data.to_json : '') + custom_prompt
           overview_digest = Digest::SHA256.hexdigest(digest_source)[0..15]
           ai_cache_key = "milestone/ai_summary/#{@project.id}/#{@selected_version_id}/#{overview_digest}"
           Rails.cache.delete(ai_cache_key) if force
@@ -385,17 +386,30 @@ class MilestoneController < ApplicationController
 
       context = data_lines.join("\n")
 
-      requirements = ["5~10문장으로 핵심을 전달"]
-      requirements << "가장 심각한 리스크나 주의사항을 먼저 언급"
-      requirements << "전체적인 진행 상태에 대한 판단 포함"
-      requirements << "주요 일정(빌드 전달일, 마감일 등)의 경과/잔여 상황을 고려하여 현재 시점의 위치를 판단"
-      requirements << "잔여 작업일 정보가 포함된 경우, 실제 작업 가능 일수를 기반으로 일정 리스크를 판단"
-      requirements << "버그 수정 추이가 포함된 경우, 릴리즈까지 버그 해소 전망도 언급" if bug_data.present?
-      requirements << "마크다운 없이 평문으로 작성"
-      requirements << "한국어로 작성"
+      # 커스텀 프롬프트 설정 확인
+      mcp_settings = Setting.plugin_redmine_tx_mcp rescue {}
+      if mcp_settings['use_custom_summary_prompt'].to_s == '1' && mcp_settings['custom_summary_prompt'].present?
+        prompt = mcp_settings['custom_summary_prompt']
+      else
+        total_work = roadmap.sum { |r| (r[:descendant_stats] || {})[:total].to_i }
+        total_no_due = roadmap.sum { |r| (r[:descendant_stats] || {})[:no_due_date].to_i }
+        no_due_ratio = total_work > 0 ? (total_no_due.to_f / total_work * 100).round(0) : 0
 
-      prompt = "위 프로젝트 마일스톤 현황 데이터를 바탕으로 프로젝트 매니저에게 보고하는 간결한 현황 요약을 작성해 주세요.\n\n요구사항:\n" +
-        requirements.map { |r| "- #{r}" }.join("\n")
+        requirements = ["5~10문장으로 핵심을 전달"]
+        requirements << "가장 심각한 리스크나 주의사항을 먼저 언급"
+        if no_due_ratio >= 30
+          requirements << "일정 미배정 일감이 전체의 #{no_due_ratio}%에 달하므로, 일정 리스크 판단 자체가 어려운 상황임을 최우선으로 강조하고, 일정 배정이 선행되어야 한다는 점을 명확히 언급"
+        end
+        requirements << "전체적인 진행 상태에 대한 판단 포함"
+        requirements << "주요 일정(빌드 전달일, 마감일 등)의 경과/잔여 상황을 고려하여 현재 시점의 위치를 판단"
+        requirements << "잔여 작업일 정보가 포함된 경우, 실제 작업 가능 일수를 기반으로 일정 리스크를 판단"
+        requirements << "버그 수정 추이가 포함된 경우, 릴리즈까지 버그 해소 전망도 언급" if bug_data.present?
+        requirements << "마크다운 없이 평문으로 작성"
+        requirements << "한국어로 작성"
+
+        prompt = "위 프로젝트 마일스톤 현황 데이터를 바탕으로 프로젝트 매니저에게 보고하는 간결한 현황 요약을 작성해 주세요.\n\n요구사항:\n" +
+          requirements.map { |r| "- #{r}" }.join("\n")
+      end
 
       "#{context}\n\n#{prompt}"
     end
