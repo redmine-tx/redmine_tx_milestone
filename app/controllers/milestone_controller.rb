@@ -46,6 +46,16 @@ class MilestoneController < ApplicationController
           Rails.cache.fetch("#{cache_base}/bugs", expires_in: 1.hour) do
             process_bugs_data(Date.today, @selected_version_id)
           end
+
+        # AI 현황 요약 — overview+bug 데이터 해시 기반 캐시
+        if @overview && !@overview[:error] && defined?(RedmineTxMcp::LlmService) && RedmineTxMcp::LlmService.available?
+          bug_data = build_bug_data_for_ai(@overview, @selected_version_id)
+          digest_source = @overview.to_json + (bug_data ? bug_data.to_json : '')
+          overview_digest = Digest::SHA256.hexdigest(digest_source)[0..15]
+          @ai_summary = Rails.cache.fetch("milestone/ai_summary/#{@project.id}/#{@selected_version_id}/#{overview_digest}", expires_in: 1.day) do
+            RedmineTxMcp::LlmService.summarize(build_ai_summary_prompt(@overview, bug_data: bug_data))
+          end
+        end
       end
     end
 
@@ -245,6 +255,142 @@ class MilestoneController < ApplicationController
     end
 
     private
+
+    # 릴리즈 15일 이내일 때 버그 추이 데이터 수집
+    def build_bug_data_for_ai(overview, version_id)
+      due_date_str = overview[:version][:due_date]
+      return nil unless due_date_str
+
+      days_to_release = (Date.parse(due_date_str) - Date.today).to_i
+      return nil unless days_to_release <= 15
+
+      version = Version.find(version_id)
+      RedmineTxMilestone::SlackDashboardNotifier.send(:build_bug_data, version.project, version_id)
+    rescue => e
+      Rails.logger.error "build_bug_data_for_ai error: #{e.message}"
+      nil
+    end
+
+    def build_ai_summary_prompt(overview, bug_data: nil)
+      v = overview[:version]
+      roadmap = overview[:roadmap_issues]
+      alerts = overview[:alerts]
+      risk_top = overview[:assignee_risk_top]
+
+      today = Date.today
+      data_lines = []
+      data_lines << "오늘: #{today}"
+      data_lines << "버전: #{v[:name]}"
+      data_lines << "완료율: #{v[:done_ratio].is_a?(Float) ? v[:done_ratio].round(1) : v[:done_ratio]}%"
+      data_lines << "개발마감: #{v[:dev_deadline]}" if v[:dev_deadline]
+      data_lines << "릴리즈: #{v[:due_date]}" if v[:due_date]
+      data_lines << "전체 일감: #{v[:total_issues]}건, 로드맵: #{roadmap.size}건"
+
+      # 마일스톤 일정 마크 (빌드 전달일, 확정일 등)
+      marks = (v[:marks] || []).select { |m| m[:date].present? }
+                .map { |m| { date: Date.parse(m[:date]), name: m[:name], is_deadline: m[:is_deadline] } }
+                .sort_by { |m| m[:date] }
+      if marks.any?
+        data_lines << "\n주요 일정:"
+        marks.each do |m|
+          days_diff = (m[:date] - today).to_i
+          status = if days_diff < 0
+                     "#{days_diff.abs}일 경과"
+                   elsif days_diff == 0
+                     "오늘"
+                   else
+                     "#{days_diff}일 남음"
+                   end
+          data_lines << "  #{m[:date]} #{m[:name]}#{m[:is_deadline] ? ' [마감]' : ''} (#{status})"
+        end
+      end
+
+      if v[:dev_deadline]
+        total_past = roadmap.sum { |r| (r[:descendant_stats] || {})[:past_dev_deadline].to_i }
+        data_lines << "개발마감 이후 완료 예정 일감: #{total_past}건" if total_past > 0
+      end
+
+      # 마감/릴리즈까지 잔여 작업일 및 공휴일 정보
+      deadline_dates = {}
+      deadline_dates['개발마감'] = Date.parse(v[:dev_deadline]) if v[:dev_deadline]
+      deadline_dates['릴리즈'] = Date.parse(v[:due_date]) if v[:due_date]
+      if deadline_dates.any? { |_, d| d > today }
+        holidays = if TxBaseHelper::HolidayApi.available?
+                     farthest = deadline_dates.values.max
+                     TxBaseHelper::HolidayApi.for_date_range(today, farthest)
+                   else
+                     {}
+                   end
+
+        data_lines << "\n잔여 작업일:"
+        deadline_dates.each do |label, target_date|
+          next if target_date <= today
+          calendar_days = (target_date - today).to_i
+          weekends = (today...target_date).count { |d| d.saturday? || d.sunday? }
+          holiday_count = holidays.count { |date, _| date > today && date < target_date && !date.saturday? && !date.sunday? }
+          workdays = calendar_days - weekends - holiday_count
+          data_lines << "  #{label}(#{target_date})까지: 역일 #{calendar_days}일, 작업일 #{workdays}일 (주말 #{weekends}일, 공휴일 #{holiday_count}일 제외)"
+        end
+
+        if holidays.any? { |date, _| date > today }
+          upcoming = holidays.select { |date, _| date > today }.sort_by { |date, _| date }.first(5)
+          holiday_names = upcoming.map { |date, info| "#{date.strftime('%-m/%-d')} #{info[:name] || info['name']}" }
+          data_lines << "  예정 공휴일: #{holiday_names.join(', ')}"
+        end
+      end
+
+      if alerts.present?
+        grouped = alerts.group_by { |a| a[:parent_id] }
+        data_lines << "\n알림 (#{grouped.size}건):"
+        grouped.first(15).each do |_, alert_list|
+          parts = alert_list.map do |a|
+            case a[:type]
+            when 'past_dev_deadline' then "마감초과 #{a[:count]}건"
+            when 'overdue_descendants' then "지연 #{a[:overdue_count]}건"
+            when 'no_due_date_descendants' then "일정없음 #{a[:count]}건"
+            when 'not_started_descendants' then "미개시 #{a[:count]}건"
+            end
+          end.compact
+          data_lines << "  #{alert_list.first[:subject]}: #{parts.join(', ')}"
+        end
+      end
+
+      if risk_top.present?
+        data_lines << "\n담당자별 리스크 Top 5:"
+        risk_top.each do |r|
+          next if r[:total] == 0
+          data_lines << "  #{r[:name]}: 지연 #{r[:overdue]}건, 미개시 #{r[:not_started]}건"
+        end
+      end
+
+      # 릴리즈 15일 이내: 버그 추이 데이터 추가
+      if bug_data.present?
+        recent = bug_data.last(7)
+        current_remaining = bug_data.last[:remaining]
+        week_created = recent.sum { |d| d[:created] }
+        week_completed = recent.sum { |d| d[:completed] }
+        data_lines << "\n버그 수정 추이 (릴리즈 임박):"
+        data_lines << "  현재 잔여 버그: #{current_remaining}건"
+        data_lines << "  최근 7일 — 생성: #{week_created}건, 해결: #{week_completed}건"
+        recent.each { |d| data_lines << "  #{d[:date]}: 생성 #{d[:created]}, 해결 #{d[:completed]}, 잔여 #{d[:remaining]}" }
+      end
+
+      context = data_lines.join("\n")
+
+      requirements = ["5~10문장으로 핵심을 전달"]
+      requirements << "가장 심각한 리스크나 주의사항을 먼저 언급"
+      requirements << "전체적인 진행 상태에 대한 판단 포함"
+      requirements << "주요 일정(빌드 전달일, 마감일 등)의 경과/잔여 상황을 고려하여 현재 시점의 위치를 판단"
+      requirements << "잔여 작업일 정보가 포함된 경우, 실제 작업 가능 일수를 기반으로 일정 리스크를 판단"
+      requirements << "버그 수정 추이가 포함된 경우, 릴리즈까지 버그 해소 전망도 언급" if bug_data.present?
+      requirements << "마크다운 없이 평문으로 작성"
+      requirements << "한국어로 작성"
+
+      prompt = "위 프로젝트 마일스톤 현황 데이터를 바탕으로 프로젝트 매니저에게 보고하는 간결한 현황 요약을 작성해 주세요.\n\n요구사항:\n" +
+        requirements.map { |r| "- #{r}" }.join("\n")
+
+      "#{context}\n\n#{prompt}"
+    end
 
   def find_issue_for_predict
     @issue = Issue.visible.find(params[:issue_id])
