@@ -36,20 +36,21 @@ class MilestoneController < ApplicationController
                              end
 
       if @selected_version_id
+        skip_cache = Rails.env.development?
         cache_base = "milestone/dashboard/#{@project.id}/#{@selected_version_id}/#{Date.today}"
-        force = params[:force] == 'true'
+        force = params[:force] == 'true' || skip_cache
 
         if force
           Rails.cache.delete("#{cache_base}/overview")
           Rails.cache.delete("#{cache_base}/bugs")
         end
 
-        @overview = Rails.cache.fetch("#{cache_base}/overview", expires_in: 1.hour) do
+        @overview = Rails.cache.fetch("#{cache_base}/overview", expires_in: skip_cache ? 0 : 1.hour) do
           RedmineTxMilestone::SummaryService.dashboard_overview(@selected_version_id)
         end
 
-        @issues_by_days, @rest_issue_count_per_category, _, _, @all_bug_issues, _ =
-          Rails.cache.fetch("#{cache_base}/bugs", expires_in: 1.hour) do
+        @issues_by_days, @rest_issue_count_per_category, @rest_bug_issues, _, @all_bug_issues, _ =
+          Rails.cache.fetch("#{cache_base}/bugs", expires_in: skip_cache ? 0 : 1.hour) do
             process_bugs_data(Date.today, @selected_version_id)
           end
 
@@ -63,7 +64,7 @@ class MilestoneController < ApplicationController
           digest_source = @overview.to_json + (bug_data ? bug_data.to_json : '') + custom_prompt + "#{llm_provider}:#{llm_model}"
           overview_digest = Digest::SHA256.hexdigest(digest_source)[0..15]
           ai_cache_key = "milestone/ai_summary/#{@project.id}/#{@selected_version_id}/#{overview_digest}"
-          Rails.cache.delete(ai_cache_key) if force
+          Rails.cache.delete(ai_cache_key) if params[:force] == 'true'
           @ai_summary = Rails.cache.fetch(ai_cache_key, expires_in: 1.day, skip_nil: true) do
             result = RedmineTxMcp::LlmService.summarize(build_ai_summary_prompt(@overview, bug_data: bug_data))
             result.present? ? result : nil

@@ -52,13 +52,52 @@
     tl_marks = (v[:marks] || []).select { |m| m[:date].present? }.map { |m| { date: Date.parse(m[:date]), name: m[:name], is_deadline: m[:is_deadline] } }.sort_by { |m| m[:date] }
     if tl_start && tl_end && tl_start < tl_end
       tl_total = (tl_end - tl_start).to_i
-      tl_today_pct = [[(Date.today - tl_start).to_i * 100.0 / tl_total, 0].max, 100].min.round(1)
+      tl_elapsed = [(Date.today - tl_start).to_i, 0].max
+      tl_remaining = [tl_total - tl_elapsed, 0].max
+      tl_today_pct = [[tl_elapsed * 100.0 / tl_total, 0].max, 100].min.round(1)
+
+      # 하루 퍼센트
+      tl_day_pct = (100.0 / tl_total).round(4)
+
+      # 월 경계 눈금 계산
+      tl_month_ticks = []
+      cursor = (tl_start.beginning_of_month >> 1)
+      while cursor < tl_end
+        pct = ((cursor - tl_start).to_i * 100.0 / tl_total).round(1)
+        tl_month_ticks << { date: cursor, pct: pct, label: cursor.strftime('%-m월') } if pct > 2 && pct < 98
+        cursor = cursor >> 1
+      end
+
+      # 주말 구간 계산
+      tl_weekends = []
+      (0...tl_total).each do |d|
+        day = tl_start + d
+        if day.saturday? || day.sunday?
+          pct = (d * 100.0 / tl_total).round(4)
+          tl_weekends << { pct: pct, width: tl_day_pct }
+        end
+      end
   %>
   <div class="db-timeline">
-    <div class="db-timeline-bar">
-      <div class="db-timeline-progress" style="width:<%= tl_today_pct %>%;" title="오늘 (<%= Date.today %>)">
-        <span class="db-timeline-today-label">오늘</span>
-      </div>
+    <div class="db-timeline-bar" style="background-size:<%= tl_day_pct %>% 100%; background-image: linear-gradient(90deg, rgba(0,0,0,0.08) 1px, transparent 1px);">
+      <!-- 주말 표시 -->
+      <% tl_weekends.each do |w| %>
+        <div class="db-timeline-weekend" style="left:<%= w[:pct] %>%; width:<%= w[:width] %>%;"></div>
+      <% end %>
+      <div class="db-timeline-progress" style="width:<%= tl_today_pct %>%; background: linear-gradient(90deg, rgba(255,255,255,0.3) 1px, transparent 1px) 0 0 / <%= tl_day_pct %>% 100%, #5b9bd5;"></div>
+      <!-- 오늘 마커 -->
+      <% if tl_today_pct > 0 && tl_today_pct < 100 %>
+        <div class="db-timeline-today-marker" style="left:<%= tl_today_pct %>%;">
+          <span class="db-timeline-today-date">오늘 (<%= Date.today.strftime('%-m/%-d') %>)</span>
+        </div>
+      <% end %>
+      <!-- 월 눈금 -->
+      <% tl_month_ticks.each do |tick| %>
+        <div class="db-timeline-month-tick" style="left:<%= tick[:pct] %>%;">
+          <span class="db-timeline-month-label"><%= tick[:label] %></span>
+        </div>
+      <% end %>
+      <!-- 마일스톤 마크 -->
       <% tl_marks.each do |m| %>
         <% m_pct = [[(m[:date] - tl_start).to_i * 100.0 / tl_total, 0].max, 100].min.round(1) %>
         <div class="db-timeline-mark<%= ' db-timeline-mark-deadline' if m[:is_deadline] %>" style="left:<%= m_pct %>%;" title="<%= m[:name] %> (<%= m[:date] %>)">
@@ -67,9 +106,19 @@
         </div>
       <% end %>
     </div>
-    <div class="db-timeline-edges">
-      <span><%= tl_start %></span>
-      <span><%= tl_end %></span>
+    <div class="db-timeline-info">
+      <span class="db-timeline-edge"><%= tl_start.strftime('%Y-%-m-%-d') %></span>
+      <span class="db-timeline-summary">
+        <% if tl_elapsed <= tl_total %>
+          <span class="db-tl-elapsed"><%= tl_elapsed %>일 경과</span>
+          <span class="db-tl-sep">/</span>
+          <span class="db-tl-remaining<%= ' db-tl-remaining-urgent' if tl_remaining <= 14 %>"><%= tl_remaining %>일 남음</span>
+          <span class="db-tl-total">(전체 <%= tl_total %>일)</span>
+        <% else %>
+          <span class="db-tl-overdue">마감일 초과 <%= tl_elapsed - tl_total %>일</span>
+        <% end %>
+      </span>
+      <span class="db-timeline-edge"><%= tl_end.strftime('%Y-%-m-%-d') %></span>
     </div>
   </div>
   <% end %>
@@ -322,25 +371,54 @@
       <% end %>
     </div>
 
-    <!-- 기타 일감 현황 -->
+    <!-- 담당자별 미해결 BUG 현황 -->
     <div class="db-card">
-      <h3>기타 일감 (로드맵 외)</h3>
-      <% if other[:total] > 0 %>
+      <h3><%= link_to '담당자별 미해결 BUG Top 5', report_bugs_project_milestone_index_path(@project, version_id: @selected_version_id) %></h3>
+      <% if @rest_bug_issues.present? && @rest_bug_issues.any? { |_, v| v.values.sum > 0 } %>
         <%
-          other_url = ->(ids_key) {
-            ids = other[ids_key].to_s
-            ids.present? ? issues_path(set_filter: 1, "f[]": "issue_id", "op[issue_id]": "=", "v[issue_id][]": ids) : nil
-          }
+          bug_ids = Tracker.where(is_bug: true).pluck(:id)
+          sorted_bug_assignees = @rest_bug_issues.sort_by { |_, versions| -versions.values.sum }.first(5)
+          bug_grand_total = @rest_bug_issues.values.sum { |versions| versions.values.sum }
         %>
-        <div class="db-inline-stats">
-          <span>전체: <strong><%= other[:ids_total].present? ? link_to(other[:total], other_url.(:ids_total)) : other[:total] %></strong></span>
-          <span>진행중: <strong><%= other[:ids_open].present? ? link_to(other[:open], other_url.(:ids_open)) : other[:open] %></strong></span>
-          <% if other[:overdue] > 0 %>
-            <span class="db-label-overdue">지연: <strong><%= other[:ids_overdue].present? ? link_to(other[:overdue], other_url.(:ids_overdue)) : other[:overdue] %></strong></span>
-          <% end %>
-        </div>
+        <table class="list db-issue-table">
+          <thead>
+            <tr>
+              <th>담당자</th>
+              <th style="text-align:center">미해결</th>
+            </tr>
+          </thead>
+          <tbody>
+            <% sorted_bug_assignees.each do |assignee, versions| %>
+              <% row_total = versions.values.sum %>
+              <% next if row_total == 0 %>
+              <tr>
+                <td>
+                  <% if assignee.is_a?(Principal) %>
+                    <%= link_to_principal(assignee) %>
+                  <% elsif assignee.is_a?(Integer) %>
+                    <% user = User.find_by(id: assignee) %>
+                    <%= user ? link_to_principal(user) : "User##{assignee}" %>
+                  <% elsif assignee %>
+                    <%= assignee.to_s %>
+                  <% else %>
+                    미지정
+                  <% end %>
+                </td>
+                <td style="text-align:center">
+                  <strong>
+                    <% if assignee %>
+                      <%= link_to_bug_issues_count(bug_ids, row_total, assignee_id: (assignee.respond_to?(:id) ? assignee.id : assignee), version_ids: @selected_version_id) %>
+                    <% else %>
+                      <%= row_total %>
+                    <% end %>
+                  </strong>
+                </td>
+              </tr>
+            <% end %>
+          </tbody>
+        </table>
       <% else %>
-        <p class="db-empty">로드맵 외 일감 없음</p>
+        <p class="db-empty">미해결 BUG 없음</p>
       <% end %>
     </div>
   </div>
@@ -411,6 +489,28 @@
     <% end %>
   </div>
 
+  <!-- 기타 일감 현황 -->
+  <div class="db-card db-card-full">
+    <h3>기타 일감 (로드맵 외)</h3>
+    <% if other[:total] > 0 %>
+      <%
+        other_url = ->(ids_key) {
+          ids = other[ids_key].to_s
+          ids.present? ? issues_path(set_filter: 1, "f[]": "issue_id", "op[issue_id]": "=", "v[issue_id][]": ids) : nil
+        }
+      %>
+      <div class="db-inline-stats">
+        <span>전체: <strong><%= other[:ids_total].present? ? link_to(other[:total], other_url.(:ids_total)) : other[:total] %></strong></span>
+        <span>진행중: <strong><%= other[:ids_open].present? ? link_to(other[:open], other_url.(:ids_open)) : other[:open] %></strong></span>
+        <% if other[:overdue] > 0 %>
+          <span class="db-label-overdue">지연: <strong><%= other[:ids_overdue].present? ? link_to(other[:overdue], other_url.(:ids_overdue)) : other[:overdue] %></strong></span>
+        <% end %>
+      </div>
+    <% else %>
+      <p class="db-empty">로드맵 외 일감 없음</p>
+    <% end %>
+  </div>
+
 <% elsif @overview && @overview[:error] %>
   <div class="flash error"><%= @overview[:error] %></div>
 <% else %>
@@ -443,20 +543,49 @@
 
 .db-timeline { margin: 8px 0 20px; }
 .db-timeline-bar {
-  position: relative; height: 24px; background: #e9ecef; border-radius: 6px;
-  margin: 28px 0 6px; overflow: visible;
+  position: relative; height: 28px; background: #e9ecef; border-radius: 6px;
+  margin: 28px 0 8px; overflow: visible;
 }
 .db-timeline-progress {
-  height: 100%; background: #5b9bd5; border-radius: 6px 0 0 6px;
-  position: relative; z-index: 0; min-width: 0;
+  height: 100%; border-radius: 6px 0 0 6px;
+  position: relative; z-index: 1; min-width: 0;
+  background-color: #5b9bd5;
 }
-.db-timeline-today-label {
-  position: absolute; right: 4px; top: 50%; transform: translateY(-50%);
-  font-size: 0.7em; font-weight: bold; color: #fff; white-space: nowrap;
+/* 주말 배경 */
+.db-timeline-weekend {
+  position: absolute; top: 0; bottom: 0; z-index: 0;
+  background: rgba(220, 53, 69, 0.10);
 }
+/* 오늘 마커 - 수직선 + 날짜 */
+.db-timeline-today-marker {
+  position: absolute; top: -8px; bottom: -8px; width: 3px;
+  background: #1a5276; z-index: 3; border-radius: 2px;
+  box-shadow: 0 0 4px rgba(26, 82, 118, 0.5);
+}
+.db-timeline-today-marker::after {
+  content: ''; position: absolute; top: -4px; left: 50%; transform: translateX(-50%);
+  width: 0; height: 0; border-left: 5px solid transparent; border-right: 5px solid transparent;
+  border-top: 5px solid #1a5276;
+}
+.db-timeline-today-date {
+  position: absolute; top: -22px; left: 50%; transform: translateX(-50%);
+  font-size: 0.72em; font-weight: bold; color: #1a5276; white-space: nowrap;
+  background: rgba(255,255,255,0.85); padding: 0 4px; border-radius: 2px;
+}
+/* 월 눈금 */
+.db-timeline-month-tick {
+  position: absolute; top: 0; bottom: 0; width: 1px;
+  background: rgba(0,0,0,0.12); z-index: 1;
+  border-left: 1px dashed rgba(0,0,0,0.15);
+}
+.db-timeline-month-label {
+  position: absolute; bottom: -16px; left: 50%; transform: translateX(-50%);
+  font-size: 0.65em; color: #888; white-space: nowrap;
+}
+/* 마일스톤 마크 */
 .db-timeline-mark {
   position: absolute; top: -6px; bottom: -6px; width: 2px;
-  background: #6c757d; z-index: 1;
+  background: #6c757d; z-index: 2;
 }
 .db-timeline-mark-deadline { background: #e67e22; }
 .db-timeline-mark-label {
@@ -469,10 +598,19 @@
   font-size: 0.65em; color: #999; white-space: nowrap;
 }
 .db-timeline-mark-deadline .db-timeline-mark-date { color: #e67e22; }
-.db-timeline-edges {
-  display: flex; justify-content: space-between;
-  font-size: 0.75em; color: #999; margin-top: 2px;
+/* 하단 정보 */
+.db-timeline-info {
+  display: flex; justify-content: space-between; align-items: center;
+  font-size: 0.8em; color: #999; margin-top: 18px;
 }
+.db-timeline-edge { color: #999; }
+.db-timeline-summary { font-size: 1.05em; color: #555; }
+.db-tl-elapsed { color: #5b9bd5; font-weight: bold; }
+.db-tl-sep { color: #ccc; margin: 0 4px; }
+.db-tl-remaining { color: #28a745; font-weight: bold; }
+.db-tl-remaining-urgent { color: #dc3545; font-size: 1.1em; }
+.db-tl-total { color: #999; font-size: 0.9em; margin-left: 4px; }
+.db-tl-overdue { color: #dc3545; font-weight: bold; font-size: 1.1em; }
 
 .db-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; margin-bottom: 16px; }
 @media (max-width: 900px) { .db-grid { grid-template-columns: 1fr; } }
