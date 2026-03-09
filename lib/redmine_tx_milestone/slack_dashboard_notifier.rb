@@ -28,10 +28,11 @@ module RedmineTxMilestone
         project = version.project
 
         bug_data = build_bug_data(project, version_id)
+        ai_summary = generate_ai_summary(overview, version_id, project, bug_data)
         timeline_img = generate_timeline_image(overview)
         chart_img = bug_data.present? ? generate_bug_chart_image(bug_data) : nil
 
-        text, footer = build_slack_text(overview, project)
+        text, footer = build_slack_text(overview, project, ai_summary: ai_summary)
 
         { text: text, footer: footer, images: [timeline_img, chart_img].compact }
       end
@@ -40,7 +41,7 @@ module RedmineTxMilestone
 
       # ─── Text message ──────────────────────────────────────────
 
-      def build_slack_text(overview, project)
+      def build_slack_text(overview, project, ai_summary: nil)
         v = overview[:version]
         roadmap = overview[:roadmap_issues]
         alerts = overview[:alerts]
@@ -61,6 +62,13 @@ module RedmineTxMilestone
         total_past = roadmap.sum { |r| (r[:descendant_stats] || {})[:past_dev_deadline].to_i }
         if v[:dev_deadline] && total_past > 0
           lines << ":rotating_light: *개발마감 초과 리스크* - 개발마감(#{v[:dev_deadline]}) 이후 완료 예정 실무 일감 *#{total_past}건*"
+        end
+
+        # AI summary
+        if ai_summary.present?
+          lines << ""
+          lines << ":robot_face: *AI 요약*"
+          lines << ai_summary
         end
 
         # Alerts summary
@@ -102,6 +110,30 @@ module RedmineTxMilestone
         footer = "<#{dash_url}|:bar_chart: 대시보드 바로가기>"
 
         [lines.join("\n"), footer]
+      end
+
+      # ─── AI summary ────────────────────────────────────────────
+
+      def generate_ai_summary(overview, version_id, project, bug_data)
+        return nil unless defined?(RedmineTxMcp::LlmService) && RedmineTxMcp::LlmService.available?
+
+        mcp_settings = Setting.plugin_redmine_tx_mcp rescue {}
+        llm_provider = mcp_settings['llm_provider'] || 'anthropic'
+        llm_model = llm_provider == 'openai' ? (mcp_settings['openai_model'].presence || 'default') : (mcp_settings['claude_model'].presence || 'claude-sonnet-4-6')
+        custom_prompt = (Setting.plugin_redmine_tx_milestone rescue {}).slice('use_custom_summary_prompt', 'custom_summary_prompt').to_json
+        digest_source = overview.to_json + (bug_data ? bug_data.to_json : '') + custom_prompt + "#{llm_provider}:#{llm_model}"
+        overview_digest = Digest::SHA256.hexdigest(digest_source)[0..15]
+        cache_key = "milestone/ai_summary/#{project.id}/#{version_id}/#{overview_digest}"
+
+        Rails.cache.fetch(cache_key, expires_in: 1.day, skip_nil: true) do
+          controller = MilestoneController.new
+          prompt = controller.send(:build_ai_summary_prompt, overview, bug_data: bug_data)
+          result = RedmineTxMcp::LlmService.summarize(prompt)
+          result.present? ? result : nil
+        end
+      rescue => e
+        Rails.logger.error "SlackDashboardNotifier AI summary error: #{e.message}"
+        nil
       end
 
       # ─── Timeline image ────────────────────────────────────────
