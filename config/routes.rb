@@ -21,6 +21,7 @@ resources :projects do
       get 'gantt/issues/:issue_id', to: 'milestone#gantt'
       get 'gantt', to: 'milestone#gantt'
       get 'schedule_summary', to: 'milestone#schedule_summary'
+      get 'ai_summary', to: 'milestone#ai_summary'
       #get 'validate', to: 'milestone#validate'
       #get 'sync_parent_date', to: 'milestone#sync_parent_date'
       post 'sync_parent_date', to: 'milestone#api_sync_parent_date'

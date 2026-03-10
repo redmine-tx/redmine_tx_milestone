@@ -124,6 +124,22 @@
     #export-xlsx-btn {
       cursor: pointer;
     }
+    /* AI 요약 배너 */
+    .schedule-ai-summary {
+      background: #fff3cd; border: 1px solid #ffc107; border-left: 4px solid #e67e22;
+      border-radius: 4px; padding: 10px 16px; margin: 0 0 20px; color: #856404; font-size: 1.0em; line-height: 1.7;
+    }
+    .schedule-ai-label {
+      display: inline-block; background: #b8860b; color: #fff; font-size: 0.75em; font-weight: bold;
+      padding: 1px 6px; border-radius: 3px; margin-right: 4px; vertical-align: middle;
+    }
+    .schedule-ai-loading .spinner {
+      display: inline-block; width: 14px; height: 14px;
+      border: 2px solid #ffc107; border-top: 2px solid #856404;
+      border-radius: 50%; animation: schedule-ai-spin 0.8s linear infinite;
+      vertical-align: middle; margin-right: 6px;
+    }
+    @keyframes schedule-ai-spin { to { transform: rotate(360deg); } }
   </style>
 <% end %>
 
@@ -314,6 +330,13 @@ all_groups = Group.all.reject { |group| excluded_group_ids.include?(group.id) }
                                                .where('start_date IS NULL OR due_date IS NULL')
   %>
   
+  <div id="schedule-ai-summary" class="schedule-ai-summary" style="display: none;">
+    <span class="schedule-ai-label">AI 요약</span>
+    <span id="schedule-ai-content" class="schedule-ai-loading">
+      <span class="spinner"></span> AI 요약을 생성하고 있습니다...
+    </span>
+  </div>
+
   <div class="schedule-summary-result">
     <h2>요약 결과</h2>
     
@@ -735,11 +758,11 @@ $(document).ready(function() {
   $('#export-xlsx-btn').on('click', function() {
     try {
       var today = new Date();
-      var dateStr = today.getFullYear() + 
-                    String(today.getMonth() + 1).padStart(2, '0') + 
+      var dateStr = today.getFullYear() +
+                    String(today.getMonth() + 1).padStart(2, '0') +
                     String(today.getDate()).padStart(2, '0');
       var fileName = '일정요약_' + dateStr;
-      
+
       TxXlsxExporter.exportToXlsx(jsonData, fileName)
         .then(function() {
           console.log('엑셀 다운로드 완료');
@@ -748,12 +771,41 @@ $(document).ready(function() {
           console.error('엑셀 다운로드 오류:', error);
           alert('엑셀 다운로드 중 오류가 발생했습니다: ' + error.message);
         });
-      
+
     } catch (error) {
       console.error('데이터 생성 오류:', error);
       alert('데이터 생성 중 오류가 발생했습니다: ' + error.message);
     }
   });
+
+  // AI 요약 비동기 로드
+  (function() {
+    var aiUrl = window.location.href.replace(/\/schedule_summary(\?|$)/, '/ai_summary$1')
+                + (window.location.search ? '&' : '?') + 'type=schedule_summary';
+    var $banner = $('#schedule-ai-summary');
+    var $content = $('#schedule-ai-content');
+    $banner.show();
+
+    $.ajax({
+      url: aiUrl,
+      type: 'GET',
+      dataType: 'json',
+      success: function(resp) {
+        if (resp.success && resp.summary) {
+          $content.removeClass('schedule-ai-loading').text(resp.summary);
+        } else {
+          $content.removeClass('schedule-ai-loading')
+                  .css('color', '#aaa')
+                  .text(resp.error || 'AI 요약을 생성할 수 없습니다.');
+        }
+      },
+      error: function() {
+        $content.removeClass('schedule-ai-loading')
+                .css('color', '#aaa')
+                .text('AI 요약 요청에 실패했습니다.');
+      }
+    });
+  })();
 });
 </script>
 <% end %>

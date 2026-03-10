@@ -39,11 +39,12 @@
     </div>
   </div>
 
-  <% if @ai_summary.present? %>
-  <div class="db-risk-banner">
-    <span class="db-ai-label">AI 요약</span> <%= @ai_summary %>
+  <div id="db-ai-summary" class="db-risk-banner" style="display: none;">
+    <span class="db-ai-label">AI 요약</span>
+    <span id="db-ai-content" class="db-ai-loading">
+      <span class="db-ai-spinner"></span> AI 요약을 생성하고 있습니다...
+    </span>
   </div>
-  <% end %>
 
   <!-- 타임라인 -->
   <%
@@ -538,6 +539,13 @@
   display: inline-block; background: #b8860b; color: #fff; font-size: 0.75em; font-weight: bold;
   padding: 1px 6px; border-radius: 3px; margin-right: 4px; vertical-align: middle;
 }
+.db-ai-spinner {
+  display: inline-block; width: 14px; height: 14px;
+  border: 2px solid #ffc107; border-top: 2px solid #856404;
+  border-radius: 50%; animation: db-ai-spin 0.8s linear infinite;
+  vertical-align: middle; margin-right: 6px;
+}
+@keyframes db-ai-spin { to { transform: rotate(360deg); } }
 
 .db-done-ratio { font-size: 0.75em; font-weight: normal; color: #6c757d; }
 
@@ -662,3 +670,35 @@
 
 .db-empty { color: #888; font-style: italic; text-align: center; padding: 20px; }
 </style>
+
+<% if @overview && @overview[:error].nil? %>
+<script>
+$(document).ready(function() {
+  var $banner = $('#db-ai-summary');
+  var $content = $('#db-ai-content');
+  var aiUrl = '<%= ai_summary_project_milestone_index_path(@project) %>' +
+              '?type=dashboard&version_id=<%= @selected_version_id %>';
+  $banner.show();
+
+  $.ajax({
+    url: aiUrl,
+    type: 'GET',
+    dataType: 'json',
+    success: function(resp) {
+      if (resp.success && resp.summary) {
+        $content.removeClass('db-ai-loading').text(resp.summary);
+      } else {
+        $content.removeClass('db-ai-loading')
+                .css('color', '#aaa')
+                .text(resp.error || 'AI 요약을 생성할 수 없습니다.');
+      }
+    },
+    error: function() {
+      $content.removeClass('db-ai-loading')
+              .css('color', '#aaa')
+              .text('AI 요약 요청에 실패했습니다.');
+    }
+  });
+});
+</script>
+<% end %>

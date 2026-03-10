@@ -54,22 +54,6 @@ class MilestoneController < ApplicationController
             process_bugs_data(Date.today, @selected_version_id)
           end
 
-        # AI 현황 요약 — overview+bug 데이터 해시 기반 캐시
-        if @overview && !@overview[:error] && defined?(RedmineTxMcp::LlmService) && RedmineTxMcp::LlmService.available?
-          bug_data = build_bug_data_for_ai(@overview, @selected_version_id)
-          mcp_settings = Setting.plugin_redmine_tx_mcp rescue {}
-          llm_provider = mcp_settings['llm_provider'] || 'anthropic'
-          llm_model = llm_provider == 'openai' ? (mcp_settings['openai_model'].presence || 'default') : (mcp_settings['claude_model'].presence || 'claude-sonnet-4-6')
-          custom_prompt = (Setting.plugin_redmine_tx_milestone rescue {}).slice('use_custom_summary_prompt', 'custom_summary_prompt').to_json
-          digest_source = @overview.to_json + (bug_data ? bug_data.to_json : '') + custom_prompt + "#{llm_provider}:#{llm_model}"
-          overview_digest = Digest::SHA256.hexdigest(digest_source)[0..15]
-          ai_cache_key = "milestone/ai_summary/#{@project.id}/#{@selected_version_id}/#{overview_digest}"
-          Rails.cache.delete(ai_cache_key) if params[:force] == 'true'
-          @ai_summary = Rails.cache.fetch(ai_cache_key, expires_in: 1.day, skip_nil: true) do
-            result = RedmineTxMcp::LlmService.summarize(build_ai_summary_prompt(@overview, bug_data: bug_data))
-            result.present? ? result : nil
-          end
-        end
       end
     end
 
@@ -227,6 +211,41 @@ class MilestoneController < ApplicationController
       end
     end
 
+    # 통합 AI 요약 엔드포인트
+    # GET ai_summary?type=dashboard&version_id=123
+    # GET ai_summary?type=schedule_summary&issue_ids=1,2,3
+    def ai_summary
+      unless defined?(RedmineTxMcp::LlmService) && RedmineTxMcp::LlmService.available?
+        return render json: { success: false, error: 'AI 요약 기능을 사용할 수 없습니다. MCP 플러그인의 API 키를 확인해 주세요.' }
+      end
+
+      begin
+        case params[:type]
+        when 'dashboard'
+          prompt = build_dashboard_ai_prompt
+        when 'schedule_summary'
+          return render json: { success: false, error: '일감 ID가 필요합니다.' } unless params[:issue_ids].present?
+          data = compute_schedule_summary_data
+          prompt = build_schedule_summary_ai_prompt(data)
+        else
+          return render json: { success: false, error: "알 수 없는 요약 유형: #{params[:type]}" }
+        end
+
+        return render json: { success: false, error: '프롬프트를 생성할 수 없습니다.' } unless prompt
+
+        result = RedmineTxMcp::LlmService.summarize(prompt)
+
+        if result.present?
+          render json: { success: true, summary: result }
+        else
+          render json: { success: false, error: 'AI 응답을 받지 못했습니다.' }
+        end
+      rescue => e
+        Rails.logger.error "ai_summary error: #{e.message}\n#{e.backtrace.first(5).join("\n")}"
+        render json: { success: false, error: "요약 생성 중 오류가 발생했습니다: #{e.message}" }
+      end
+    end
+
     def sync_parent_date
     end
 
@@ -319,6 +338,22 @@ class MilestoneController < ApplicationController
     end
 
     private
+
+    # dashboard AI 요약용 프롬프트 생성 (overview 데이터를 직접 조회)
+    def build_dashboard_ai_prompt
+      version_id = if params[:version_id].present? && params[:version_id] != 'all'
+                     params[:version_id].to_i
+                   else
+                     @project&.default_version&.id
+                   end
+      return nil unless version_id
+
+      overview = RedmineTxMilestone::SummaryService.dashboard_overview(version_id)
+      return nil if overview.nil? || overview[:error]
+
+      bug_data = build_bug_data_for_ai(overview, version_id)
+      build_ai_summary_prompt(overview, bug_data: bug_data)
+    end
 
     # 릴리즈 15일 이내일 때 버그 추이 데이터 수집
     def build_bug_data_for_ai(overview, version_id)
@@ -754,6 +789,203 @@ class MilestoneController < ApplicationController
     
     [issues_by_days, rest_issue_count_per_category, rest_bug_issues, rest_bug_count_per_category, all_bug_issues, Time.current]
   end
+
+    # --- schedule_summary_ai helpers ---
+
+    def compute_schedule_summary_data
+      today = Date.today
+
+      # 일감 ID 파싱 → 부모 일감 → 하위 일감 (ERB 로직 재현)
+      input_issue_ids = params[:issue_ids].to_s.split(/[,;\s]+/).map(&:strip).reject(&:empty?).map(&:to_i).uniq
+      input_issues = Issue.where(id: input_issue_ids)
+      parent_issues = input_issues.map(&:root).uniq
+
+      all_issue_ids = Set.new(input_issue_ids)
+      parent_issues.each { |i| all_issue_ids.merge(i.descendants.pluck(:id)) }
+
+      all_issues = Issue.where(id: all_issue_ids.to_a)
+
+      # tracker/status 필터 (ERB와 동일)
+      excluded_tracker_ids = (Tracker.bug_trackers_ids +
+                              Tracker.sidejob_trackers_ids +
+                              Tracker.exception_trackers_ids +
+                              Tracker.roadmap_trackers_ids).uniq
+      filtered_all = all_issues.where.not(tracker_id: excluded_tracker_ids)
+                               .where.not(status_id: IssueStatus.discarded_ids)
+      filtered = filtered_all.where.not(start_date: nil).where.not(due_date: nil)
+
+      # 1. parent_issues
+      pi_data = parent_issues.map { |i| { id: i.id, subject: i.subject } }
+
+      # 2. holidays
+      max_due = filtered.maximum(:due_date) || today
+      timeline_end = max_due + 60.days
+      holiday_list = []
+      if TxBaseHelper::HolidayApi.available?
+        raw = TxBaseHelper::HolidayApi.for_date_range(today, timeline_end)
+        holiday_list = raw.select { |d, _| d >= today }.map { |d, info| { date: d.strftime('%Y-%m-%d'), name: info[:name] || info['name'] } }
+      end
+      holidays_data = { count: holiday_list.size, list: holiday_list }
+
+      # 사용자별 그룹핑
+      issues_by_user = filtered.where.not(assigned_to_id: nil).group_by(&:assigned_to_id)
+      user_ids = issues_by_user.keys.compact
+      users = User.where(id: user_ids).index_by(&:id)
+
+      holiday_dates = Set.new(holiday_list.map { |h| Date.parse(h[:date]) })
+
+      # 3. empty_days_by_user — 담당자별 일정 공백 작업일 수
+      empty_days_by_user = {}
+      issues_by_user.each do |uid, issues|
+        user = users[uid]
+        next unless user
+        sorted = issues.sort_by(&:start_date)
+        range_start = sorted.first.start_date
+        range_end = sorted.last.due_date
+        occupied = Set.new
+        sorted.each { |i| (i.start_date..i.due_date).each { |d| occupied.add(d) } }
+        empty_work_days = (range_start..range_end).count { |d| !d.saturday? && !d.sunday? && !holiday_dates.include?(d) && !occupied.include?(d) }
+        empty_days_by_user[user.name] = empty_work_days if empty_work_days > 0
+      end
+
+      # 4. concurrent_by_user — 담당자별 최대 동시진행 일감 수
+      concurrent_by_user = {}
+      issues_by_user.each do |uid, issues|
+        user = users[uid]
+        next unless user
+        events = []
+        issues.each do |i|
+          events << [i.start_date, 1]
+          events << [i.due_date + 1, -1]
+        end
+        events.sort_by! { |d, _| d }
+        running = 0
+        max_concurrent = 0
+        events.each do |_, delta|
+          running += delta
+          max_concurrent = running if running > max_concurrent
+        end
+        concurrent_by_user[user.name] = max_concurrent if max_concurrent > 1
+      end
+
+      # 5. version_marks
+      versions = parent_issues.map(&:fixed_version).compact.uniq.select { |v| v.effective_date.present? }
+      version_marks = []
+      versions.each do |version|
+        version.marks.each do |mark|
+          next unless mark[:date].present?
+          mark_date = mark[:date].is_a?(Date) ? mark[:date] : Date.parse(mark[:date].to_s)
+          days_remaining = (mark_date - today).to_i
+          version_marks << { date: mark_date.strftime('%Y-%m-%d'), name: mark[:name], is_deadline: mark[:is_deadline], days_remaining: days_remaining }
+        end
+        version_marks << { date: version.effective_date.strftime('%Y-%m-%d'), name: version.name, is_deadline: false, days_remaining: (version.effective_date - today).to_i }
+      end
+      version_marks.sort_by! { |m| m[:date] }
+
+      # 6. issues_with_tips — tip이 있는 일감만
+      issues_with_tips = []
+      if filtered_all.first&.respond_to?(:tip)
+        filtered_all.each do |issue|
+          t = issue.tip
+          next unless t.present?
+          assignee = issue.assigned_to&.name || '미배정'
+          issues_with_tips << { id: issue.id, subject: issue.subject.truncate(40), tip: t, assignee: assignee }
+        end
+      end
+
+      # 7. missing_schedule — 일정 미기입 일감
+      missing_schedule_issues = filtered_all.where.not(assigned_to_id: nil)
+                                            .where('start_date IS NULL OR due_date IS NULL')
+      missing_list = missing_schedule_issues.map do |i|
+        { id: i.id, subject: i.subject.truncate(40), assignee: i.assigned_to&.name || '미배정' }
+      end
+      missing_schedule = { count: missing_list.size, list: missing_list.first(20) }
+
+      {
+        parent_issues: pi_data,
+        holidays: holidays_data,
+        empty_days_by_user: empty_days_by_user,
+        concurrent_by_user: concurrent_by_user,
+        version_marks: version_marks,
+        issues_with_tips: issues_with_tips,
+        missing_schedule: missing_schedule,
+        total_filtered: filtered_all.size,
+        total_with_schedule: filtered.where.not(assigned_to_id: nil).size
+      }
+    end
+
+    def build_schedule_summary_ai_prompt(data)
+      today = Date.today
+      lines = []
+      lines << "오늘: #{today}"
+      lines << "연관 일감: #{data[:parent_issues].map { |i| "##{i[:id]} #{i[:subject]}" }.join(', ')}"
+      lines << "전체 구현 일감: #{data[:total_filtered]}건, 일정 배정 완료: #{data[:total_with_schedule]}건"
+
+      # 공휴일
+      if data[:holidays][:count] > 0
+        upcoming = data[:holidays][:list].first(5)
+        lines << "\n예정 공휴일 (#{data[:holidays][:count]}건):"
+        upcoming.each { |h| lines << "  #{h[:date]} #{h[:name]}" }
+      end
+
+      # 담당자별 빈 날짜
+      if data[:empty_days_by_user].any?
+        lines << "\n담당자별 일정 공백 (작업일 기준):"
+        data[:empty_days_by_user].each { |name, days| lines << "  #{name}: #{days}일" }
+      end
+
+      # 담당자별 동시진행
+      if data[:concurrent_by_user].any?
+        lines << "\n담당자별 최대 동시진행 일감 수:"
+        data[:concurrent_by_user].each { |name, count| lines << "  #{name}: #{count}건" }
+      end
+
+      # version marks
+      if data[:version_marks].any?
+        lines << "\n주요 일정 마크:"
+        data[:version_marks].each do |m|
+          status = if m[:days_remaining] < 0
+                     "#{m[:days_remaining].abs}일 경과"
+                   elsif m[:days_remaining] == 0
+                     "오늘"
+                   else
+                     "#{m[:days_remaining]}일 남음"
+                   end
+          lines << "  #{m[:date]} #{m[:name]}#{m[:is_deadline] ? ' [마감]' : ''} (#{status})"
+        end
+      end
+
+      # 일정 미기입
+      if data[:missing_schedule][:count] > 0
+        lines << "\n일정 미기입 일감 (#{data[:missing_schedule][:count]}건):"
+        data[:missing_schedule][:list].each { |i| lines << "  ##{i[:id]} #{i[:subject]} (#{i[:assignee]})" }
+      end
+
+      # tips
+      if data[:issues_with_tips].any?
+        lines << "\n주의가 필요한 일감 (#{data[:issues_with_tips].size}건):"
+        data[:issues_with_tips].first(15).each { |i| lines << "  ##{i[:id]} #{i[:subject]} (#{i[:assignee]}): #{i[:tip]}" }
+      end
+
+      context = lines.join("\n")
+
+      missing_ratio = data[:total_filtered] > 0 ? (data[:missing_schedule][:count].to_f / data[:total_filtered] * 100).round(0) : 0
+
+      requirements = ["5~10문장으로 핵심을 전달"]
+      requirements << "가장 심각한 리스크나 주의사항을 먼저 언급"
+      if missing_ratio >= 30
+        requirements << "일정 미기입 일감이 전체의 #{missing_ratio}%에 달하므로, 일정 리스크 판단이 어려운 상황임을 최우선으로 강조"
+      end
+      requirements << "담당자별 동시진행 일감이 많거나 일정 공백이 큰 경우 리스크로 언급"
+      requirements << "주요 일정 마크의 경과/잔여 상황을 고려하여 현재 시점의 위치를 판단"
+      requirements << "마크다운 없이 평문으로 작성"
+      requirements << "한국어로 작성"
+
+      prompt = "위 일정요약 데이터를 바탕으로 프로젝트 매니저에게 보고하는 간결한 일정 현황 요약을 작성해 주세요.\n\n요구사항:\n" +
+        requirements.map { |r| "- #{r}" }.join("\n")
+
+      "#{context}\n\n#{prompt}"
+    end
 
     def find_project
       @user = params[:user_id] ? User.find(params[:user_id]) : User.current
