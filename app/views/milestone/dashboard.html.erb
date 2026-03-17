@@ -39,12 +39,14 @@
     </div>
   </div>
 
+  <% if Setting.plugin_redmine_tx_milestone['enable_ai_summary'] == 'true' %>
   <div id="db-ai-summary" class="db-risk-banner" style="display: none;">
     <span class="db-ai-label">AI 요약</span>
     <span id="db-ai-content" class="db-ai-loading">
       <span class="db-ai-spinner"></span> AI 요약을 생성하고 있습니다...
     </span>
   </div>
+  <% end %>
 
   <!-- 타임라인 -->
   <%
@@ -671,7 +673,7 @@
 .db-empty { color: #888; font-style: italic; text-align: center; padding: 20px; }
 </style>
 
-<% if @overview && @overview[:error].nil? %>
+<% if @overview && @overview[:error].nil? && Setting.plugin_redmine_tx_milestone['enable_ai_summary'] == 'true' %>
 <script>
 $(document).ready(function() {
   var $banner = $('#db-ai-summary');

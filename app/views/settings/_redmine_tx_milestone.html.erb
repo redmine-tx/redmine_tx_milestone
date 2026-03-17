@@ -54,7 +54,17 @@
 
   <br>
 
-  <h3>AI 일정요약 프롬프트</h3>
+  <h3>AI 요약 설정</h3>
+  <p>
+    <input type="checkbox" name="settings[enable_ai_summary]"
+           id="settings_enable_ai_summary"
+           value="true"
+           <%= 'checked' if @settings['enable_ai_summary'] == 'true' %>>
+    <label for="settings_enable_ai_summary">AI 요약 기능 사용</label>
+    <span class="description">대시보드 및 일정요약 페이지에서 AI 요약 배너를 표시합니다. 해제 시 AI 요약이 비활성화됩니다.</span>
+  </p>
+
+  <div id="ai-summary-options">
   <p>
     <input type="checkbox" name="settings[use_custom_summary_prompt]"
            id="settings_use_custom_summary_prompt"
@@ -94,6 +104,7 @@ PROMPT
     </select>
     <button type="button" id="test-summary-prompt" class="button">테스트</button>
     <span id="test-summary-loading" style="display: none; color: #888;">요약 생성중...</span>
+  </div>
   </div>
 
 </div>
@@ -192,6 +203,17 @@ $(function() {
       '</tr>';
     $(this).closest('tr').before(newRow);
   });
+
+  // ─── AI 요약 활성화 토글 ───
+  var $aiChk = $('#settings_enable_ai_summary');
+  var $aiSection = $('#ai-summary-options');
+
+  function toggleAiSummary() {
+    var on = $aiChk.is(':checked');
+    $aiSection.toggle(on);
+  }
+  $aiChk.on('change', toggleAiSummary);
+  toggleAiSummary();
 
   // ─── 커스텀 프롬프트 토글 ───
   var $chk = $('#settings_use_custom_summary_prompt');

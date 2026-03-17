@@ -31,6 +31,7 @@ Redmine::Plugin.register :redmine_tx_milestone do
     ],
     'setting_milestone_dev_complete_index' => '0',
     'setting_milestone_use_redmine_auto_schedule' => 'false',
+    'enable_ai_summary' => 'false',
     'use_custom_summary_prompt' => 'false',
     'custom_summary_prompt' => ''
   }, :partial => 'settings/redmine_tx_milestone'

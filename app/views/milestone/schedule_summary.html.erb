@@ -140,6 +140,16 @@
       vertical-align: middle; margin-right: 6px;
     }
     @keyframes schedule-ai-spin { to { transform: rotate(360deg); } }
+    /* 산정 제외 경고 배너 */
+    .schedule-excluded-warning {
+      background: #fff3cd; border: 1px solid #ffc107; border-left: 4px solid #e67e22;
+      border-radius: 4px; padding: 10px 16px; margin: 0 0 16px; color: #856404; font-size: 0.95em; line-height: 1.6;
+    }
+    .schedule-excluded-warning a { color: #856404; text-decoration: underline; }
+    .schedule-excluded-critical {
+      background: #f8d7da; border-color: #f5c6cb; border-left-color: #dc3545; color: #721c24;
+    }
+    .schedule-excluded-critical a { color: #721c24; }
   </style>
 <% end %>
 
@@ -330,21 +340,41 @@ all_groups = Group.all.reject { |group| excluded_group_ids.include?(group.id) }
                                                .where('start_date IS NULL OR due_date IS NULL')
   %>
   
+  <% if Setting.plugin_redmine_tx_milestone['enable_ai_summary'] == 'true' %>
   <div id="schedule-ai-summary" class="schedule-ai-summary" style="display: none;">
     <span class="schedule-ai-label">AI 요약</span>
     <span id="schedule-ai-content" class="schedule-ai-loading">
       <span class="spinner"></span> AI 요약을 생성하고 있습니다...
     </span>
   </div>
+  <% end %>
+
+  <%
+    excluded_count = unassigned_issues.size + missing_schedule_issues.size
+    excluded_pct = filtered_all_issues.size > 0 ? (excluded_count * 100.0 / filtered_all_issues.size).round(0) : 0
+  %>
+  <% if excluded_count > 0 %>
+    <div class="schedule-excluded-warning<%= ' schedule-excluded-critical' if excluded_pct >= 30 %>">
+      <strong>⚠ 산정 제외 일감 <%= excluded_count %>건 (<%= excluded_pct %>%)</strong>
+      — 전체 <%= filtered_all_issues.size %>건 중
+      <% parts = [] %>
+      <% parts << "<a href=\"#unassigned-issues-list\">미배정 #{unassigned_issues.size}건</a>" if unassigned_issues.any? %>
+      <% parts << "<a href=\"#missing-schedule-issues-list\">일정 미기입 #{missing_schedule_issues.size}건</a>" if missing_schedule_issues.any? %>
+      <%= raw parts.join(', ') %>이 일정 요약에서 빠져 있습니다.
+      <% if excluded_pct >= 30 %>
+        <br><strong>일정 산정의 신뢰도가 낮습니다. 일정 배정을 먼저 진행해 주세요.</strong>
+      <% end %>
+    </div>
+  <% end %>
 
   <div class="schedule-summary-result">
     <h2>요약 결과</h2>
-    
+
     <%# '메인 일감별 색상'은 타임라인 그리드의 범례(jsonData.legends)와 중복되므로 표기하지 않음 %>
-    
+
     <p>
-      입력된 일감: <strong><%= input_issue_ids.size %>개</strong> | 
-      전체 일감 (하위 포함, 실제 구현 일감만): <strong><%= filtered_all_issues.size %>개</strong> | 
+      입력된 일감: <strong><%= input_issue_ids.size %>개</strong> |
+      전체 일감 (하위 포함, 실제 구현 일감만): <strong><%= filtered_all_issues.size %>개</strong> |
       요약된 일감 (담당자/일정 있음): <strong><%= filtered_issues.where.not(assigned_to_id: nil).size %>개</strong>
     </p>
     
@@ -779,6 +809,7 @@ $(document).ready(function() {
   });
 
   // AI 요약 비동기 로드
+  <% if Setting.plugin_redmine_tx_milestone['enable_ai_summary'] == 'true' %>
   (function() {
     var aiUrl = window.location.href.replace(/\/schedule_summary(\?|$)/, '/ai_summary$1')
                 + (window.location.search ? '&' : '?') + 'type=schedule_summary';
@@ -806,6 +837,7 @@ $(document).ready(function() {
       }
     });
   })();
+  <% end %>
 });
 </script>
 <% end %>
