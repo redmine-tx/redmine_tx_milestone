@@ -364,8 +364,6 @@ all_groups = Group.all.reject { |group| excluded_group_ids.include?(group.id) }
   <% end %>
 
   <div class="schedule-summary-result">
-    <h2>요약 결과</h2>
-
     <%# '메인 일감별 색상'은 타임라인 그리드의 범례(jsonData.legends)와 중복되므로 표기하지 않음 %>
 
     <p>
