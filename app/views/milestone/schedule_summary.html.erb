@@ -364,14 +364,6 @@ all_groups = Group.all.reject { |group| excluded_group_ids.include?(group.id) }
   <% end %>
 
   <div class="schedule-summary-result">
-    <%# '메인 일감별 색상'은 타임라인 그리드의 범례(jsonData.legends)와 중복되므로 표기하지 않음 %>
-
-    <p>
-      입력된 일감: <strong><%= input_issue_ids.size %>개</strong> |
-      전체 일감 (하위 포함, 실제 구현 일감만): <strong><%= filtered_all_issues.size %>개</strong> |
-      요약된 일감 (담당자/일정 있음): <strong><%= filtered_issues.where.not(assigned_to_id: nil).size %>개</strong>
-    </p>
-    
     <% if result_data.any? %>
       <!-- 타임라인 그리드 -->
       <div id="timeline-grid-container" style="margin: 20px 0;"></div>
@@ -447,6 +439,12 @@ all_groups = Group.all.reject { |group| excluded_group_ids.include?(group.id) }
         </div>
       </details>
     <% end %>
+
+    <p style="color: #888; font-size: 0.9em; margin-top: 16px;">
+      입력된 일감: <strong><%= input_issue_ids.size %>개</strong> |
+      전체 일감 (하위 포함, 실제 구현 일감만): <strong><%= filtered_all_issues.size %>개</strong> |
+      요약된 일감 (담당자/일정 있음): <strong><%= filtered_issues.where.not(assigned_to_id: nil).size %>개</strong>
+    </p>
   </div>
 <% end %>
 
