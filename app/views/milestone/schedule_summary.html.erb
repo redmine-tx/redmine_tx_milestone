@@ -142,14 +142,10 @@
     @keyframes schedule-ai-spin { to { transform: rotate(360deg); } }
     /* 산정 제외 경고 배너 */
     .schedule-excluded-warning {
-      background: #fff3cd; border: 1px solid #ffc107; border-left: 4px solid #e67e22;
-      border-radius: 4px; padding: 10px 16px; margin: 0 0 16px; color: #856404; font-size: 0.95em; line-height: 1.6;
+      background: #f8d7da; border: 1px solid #f5c6cb; border-left: 4px solid #dc3545;
+      border-radius: 4px; padding: 10px 16px; margin: 0 0 16px; color: #721c24; font-size: 0.95em; line-height: 1.6;
     }
-    .schedule-excluded-warning a { color: #856404; text-decoration: underline; }
-    .schedule-excluded-critical {
-      background: #f8d7da; border-color: #f5c6cb; border-left-color: #dc3545; color: #721c24;
-    }
-    .schedule-excluded-critical a { color: #721c24; }
+    .schedule-excluded-warning a { color: #721c24; text-decoration: underline; }
   </style>
 <% end %>
 
@@ -354,7 +350,7 @@ all_groups = Group.all.reject { |group| excluded_group_ids.include?(group.id) }
     excluded_pct = filtered_all_issues.size > 0 ? (excluded_count * 100.0 / filtered_all_issues.size).round(0) : 0
   %>
   <% if excluded_count > 0 %>
-    <div class="schedule-excluded-warning<%= ' schedule-excluded-critical' if excluded_pct >= 30 %>">
+    <div class="schedule-excluded-warning">
       <strong>⚠ 산정 제외 일감 <%= excluded_count %>건 (<%= excluded_pct %>%)</strong>
       — 전체 <%= filtered_all_issues.size %>건 중
       <% parts = [] %>
