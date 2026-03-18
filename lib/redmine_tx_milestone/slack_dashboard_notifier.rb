@@ -115,7 +115,7 @@ module RedmineTxMilestone
       # ─── AI summary ────────────────────────────────────────────
 
       def generate_ai_summary(overview, version_id, project, bug_data)
-        return nil unless (Setting.plugin_redmine_tx_milestone['enable_ai_summary'] rescue nil) == 'true'
+        return nil unless (Setting.plugin_redmine_tx_milestone['enable_ai_summary_dashboard'] rescue nil) == 'true'
         return nil unless defined?(RedmineTxMcp::LlmService) && RedmineTxMcp::LlmService.available?
 
         mcp_settings = Setting.plugin_redmine_tx_mcp rescue {}

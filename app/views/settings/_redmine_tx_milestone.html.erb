@@ -56,12 +56,20 @@
 
   <h3>AI 요약 설정</h3>
   <p>
-    <input type="checkbox" name="settings[enable_ai_summary]"
-           id="settings_enable_ai_summary"
+    <input type="checkbox" name="settings[enable_ai_summary_dashboard]"
+           id="settings_enable_ai_summary_dashboard"
            value="true"
-           <%= 'checked' if @settings['enable_ai_summary'] == 'true' %>>
-    <label for="settings_enable_ai_summary">AI 요약 기능 사용</label>
-    <span class="description">대시보드 및 일정요약 페이지에서 AI 요약 배너를 표시합니다. 해제 시 AI 요약이 비활성화됩니다.</span>
+           <%= 'checked' if @settings['enable_ai_summary_dashboard'] == 'true' %>>
+    <label for="settings_enable_ai_summary_dashboard">대시보드 AI 요약</label>
+    <span class="description">대시보드 페이지에서 AI 요약 배너를 표시합니다.</span>
+  </p>
+  <p>
+    <input type="checkbox" name="settings[enable_ai_summary_schedule]"
+           id="settings_enable_ai_summary_schedule"
+           value="true"
+           <%= 'checked' if @settings['enable_ai_summary_schedule'] == 'true' %>>
+    <label for="settings_enable_ai_summary_schedule">일정요약 AI 요약</label>
+    <span class="description">일정요약 페이지에서 AI 요약 배너를 표시합니다.</span>
   </p>
 
   <div id="ai-summary-options">
@@ -205,14 +213,16 @@ $(function() {
   });
 
   // ─── AI 요약 활성화 토글 ───
-  var $aiChk = $('#settings_enable_ai_summary');
+  var $aiChkDashboard = $('#settings_enable_ai_summary_dashboard');
+  var $aiChkSchedule = $('#settings_enable_ai_summary_schedule');
   var $aiSection = $('#ai-summary-options');
 
   function toggleAiSummary() {
-    var on = $aiChk.is(':checked');
+    var on = $aiChkDashboard.is(':checked') || $aiChkSchedule.is(':checked');
     $aiSection.toggle(on);
   }
-  $aiChk.on('change', toggleAiSummary);
+  $aiChkDashboard.on('change', toggleAiSummary);
+  $aiChkSchedule.on('change', toggleAiSummary);
   toggleAiSummary();
 
   // ─── 커스텀 프롬프트 토글 ───

@@ -39,7 +39,7 @@
     </div>
   </div>
 
-  <% if Setting.plugin_redmine_tx_milestone['enable_ai_summary'] == 'true' %>
+  <% if Setting.plugin_redmine_tx_milestone['enable_ai_summary_dashboard'] == 'true' %>
   <div id="db-ai-summary" class="db-risk-banner" style="display: none;">
     <span class="db-ai-label">AI 요약</span>
     <span id="db-ai-content" class="db-ai-loading">
@@ -673,7 +673,7 @@
 .db-empty { color: #888; font-style: italic; text-align: center; padding: 20px; }
 </style>
 
-<% if @overview && @overview[:error].nil? && Setting.plugin_redmine_tx_milestone['enable_ai_summary'] == 'true' %>
+<% if @overview && @overview[:error].nil? && Setting.plugin_redmine_tx_milestone['enable_ai_summary_dashboard'] == 'true' %>
 <script>
 $(document).ready(function() {
   var $banner = $('#db-ai-summary');

@@ -336,7 +336,7 @@ all_groups = Group.all.reject { |group| excluded_group_ids.include?(group.id) }
                                                .where('start_date IS NULL OR due_date IS NULL')
   %>
   
-  <% if Setting.plugin_redmine_tx_milestone['enable_ai_summary'] == 'true' %>
+  <% if Setting.plugin_redmine_tx_milestone['enable_ai_summary_schedule'] == 'true' %>
   <div id="schedule-ai-summary" class="schedule-ai-summary" style="display: none;">
     <span class="schedule-ai-label">AI 요약</span>
     <span id="schedule-ai-content" class="schedule-ai-loading">
@@ -801,7 +801,7 @@ $(document).ready(function() {
   });
 
   // AI 요약 비동기 로드
-  <% if Setting.plugin_redmine_tx_milestone['enable_ai_summary'] == 'true' %>
+  <% if Setting.plugin_redmine_tx_milestone['enable_ai_summary_schedule'] == 'true' %>
   (function() {
     var aiUrl = window.location.href.replace(/\/schedule_summary(\?|$)/, '/ai_summary$1')
                 + (window.location.search ? '&' : '?') + 'type=schedule_summary';

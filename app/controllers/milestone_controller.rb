@@ -215,10 +215,6 @@ class MilestoneController < ApplicationController
     # GET ai_summary?type=dashboard&version_id=123
     # GET ai_summary?type=schedule_summary&issue_ids=1,2,3
     def ai_summary
-      unless Setting.plugin_redmine_tx_milestone['enable_ai_summary'] == 'true'
-        return render json: { success: false, error: 'AI 요약 기능이 비활성화되어 있습니다. 플러그인 설정에서 활성화해 주세요.' }
-      end
-
       unless defined?(RedmineTxMcp::LlmService) && RedmineTxMcp::LlmService.available?
         return render json: { success: false, error: 'AI 요약 기능을 사용할 수 없습니다. MCP 플러그인의 API 키를 확인해 주세요.' }
       end
@@ -226,8 +222,14 @@ class MilestoneController < ApplicationController
       begin
         case params[:type]
         when 'dashboard'
+          unless Setting.plugin_redmine_tx_milestone['enable_ai_summary_dashboard'] == 'true'
+            return render json: { success: false, error: '대시보드 AI 요약 기능이 비활성화되어 있습니다. 플러그인 설정에서 활성화해 주세요.' }
+          end
           prompt = build_dashboard_ai_prompt
         when 'schedule_summary'
+          unless Setting.plugin_redmine_tx_milestone['enable_ai_summary_schedule'] == 'true'
+            return render json: { success: false, error: '일정요약 AI 요약 기능이 비활성화되어 있습니다. 플러그인 설정에서 활성화해 주세요.' }
+          end
           return render json: { success: false, error: '일감 ID가 필요합니다.' } unless params[:issue_ids].present?
           data = compute_schedule_summary_data
           prompt = build_schedule_summary_ai_prompt(data)
