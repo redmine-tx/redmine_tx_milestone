@@ -331,9 +331,10 @@ all_groups = Group.all.reject { |group| excluded_group_ids.include?(group.id) }
   # 1. 미배정 일감 (담당자 없음)
   unassigned_issues = filtered_all_issues.where(assigned_to_id: nil)
   
-  # 2. 일정 미기입 일감 (담당자는 있지만 시작일 또는 완료일 없음)
+  # 2. 일정 미기입 일감 (담당자는 있지만 시작일 또는 완료일 없음, 구현끝 제외)
   missing_schedule_issues = filtered_all_issues.where.not(assigned_to_id: nil)
                                                .where('start_date IS NULL OR due_date IS NULL')
+                                               .where.not(status_id: IssueStatus.implemented_ids)
   %>
   
   <% if Setting.plugin_redmine_tx_milestone['enable_ai_summary_schedule'] == 'true' %>
