@@ -51,9 +51,10 @@
   # 헬퍼 메서드로 비즈니스 로직 분리
   paused_periods_map = gantt_paused_periods(issues)
   depth_map_hash = gantt_depth_map(issues)
+  overrun_due_dates = gantt_top_level_overrun_due_dates(issues)
 
   _due_date = defined?(due_date) && due_date ? due_date : nil
-  date_info = gantt_date_range(issues, gantt_opts, _due_date)
+  date_info = gantt_date_range(issues, gantt_opts, _due_date, overrun_due_dates.values)
   start_date = date_info[:start_date]
   end_date = date_info[:end_date]
   today_index = date_info[:today_index]
@@ -239,6 +240,7 @@
 
             issue_begin_date = issue.begin_time ? issue.begin_time.to_date : nil
             issue_end_date = issue.end_time ? issue.end_time.to_date : Date.today
+            overrun_due_date = overrun_due_dates[issue.id]
 
             issue_progress_status_history = if show_status_history then
                                                   issue.status_history.map{ |datetime, status_id|
@@ -270,6 +272,12 @@
             end
 
             line_width = line_start_date ? ( [ line_end_date, end_date ].min - line_start_date + 1 ).to_i * cell_width : cell_width
+            overrun_extension_width = if overrun_due_date && line_end_date && overrun_due_date > line_end_date
+                                        ( [ overrun_due_date, end_date ].min - line_end_date ).to_i * cell_width
+                                      else
+                                        0
+                                      end
+            line_hit_width = line_width + overrun_extension_width
 
             tooltip_begin_date = [ issue_begin_date, line_start_date ].compact.min
             tooltip_end_date = [ issue_end_date, line_end_date ].compact.max
@@ -317,7 +325,7 @@
                       <div class="task-bar-paused" style="left: <%= left_px %>px; width: <%= width_px %>px;"></div>
                     <% end %>
                   </div>
-                  <div class="task-tooltip-hit" data-issue-tooltip="<%= issue.id %>" style="position: absolute; left: 0; top: 0; width: <%= (show_line && date == line_start_date && line_width > bar_width) ? line_width : bar_width %>px; height: <%= cell_height %>px; z-index: 50;"></div>
+                  <div class="task-tooltip-hit" data-issue-tooltip="<%= issue.id %>" style="position: absolute; left: 0; top: 0; width: <%= (show_line && date == line_start_date && line_hit_width > bar_width) ? line_hit_width : bar_width %>px; height: <%= cell_height %>px; z-index: 50;"></div>
                 <% end %>
               <% end %>
 
@@ -332,8 +340,11 @@
               <!-- 예정 이슈 -->
               <% if show_line && date == line_start_date %>
                 <div class="arrow-line<%= show_line_before ? ' show-before' : '' %> <%= show_line_after ? ' show-after' : '' %>" style="width: <%=line_width %>px; top: <%= cell_height -3 %>px;<% if defined?(virtual_ids) && virtual_ids.include?(issue.id) %> background-color: #fa0;<% end %>" data-issue-tooltip="<%= issue.id %>"></div>
+                <% if overrun_extension_width > 0 %>
+                  <div class="arrow-line-overrun" style="left: <%= line_width %>px; width: <%= overrun_extension_width %>px; top: <%= cell_height -3 %>px;" data-issue-tooltip="<%= issue.id %>"></div>
+                <% end %>
                 <% unless has_bar_here %>
-                  <div class="task-tooltip-hit" data-issue-tooltip="<%= issue.id %>" style="position: absolute; left: 0; top: 0; width: <%= line_width %>px; height: <%= cell_height %>px; z-index: 50;"></div>
+                  <div class="task-tooltip-hit" data-issue-tooltip="<%= issue.id %>" style="position: absolute; left: 0; top: 0; width: <%= line_hit_width %>px; height: <%= cell_height %>px; z-index: 50;"></div>
                 <% end %>
               <% end %>
 

@@ -239,6 +239,23 @@
     z-index: 15; /* 다른 요소들 위에 표시 (task-name, assignee 제외) */
   }
 
+  .gantt-wrapper .arrow-line-overrun {
+    position: absolute;
+    height: 2px;
+    background-color: #f90;
+    z-index: 16;
+  }
+
+  .gantt-wrapper .arrow-line-overrun::after {
+    content: '';
+    position: absolute;
+    right: 0;
+    top: -4px;
+    width: 2px;
+    height: 4px;
+    background-color: inherit;
+  }
+
   /* arrow-line.show-after::after: 연결선 끝의 화살표 머리 (오른쪽) */
   .gantt-wrapper .arrow-line.show-after::after {
     content: '';

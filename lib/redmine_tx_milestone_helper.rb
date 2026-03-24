@@ -256,15 +256,45 @@ module RedmineTxMilestoneHelper
     depth_map
   end
 
+  # 표시 중인 최상위 부모 이슈별로 자식 예정일 초과분 계산
+  def gantt_top_level_overrun_due_dates(issues)
+    return {} if issues.blank?
+
+    displayed_issue_ids = {}
+    issues.each { |issue| displayed_issue_ids[issue.id] = true }
+
+    issues.each_with_object({}) do |issue, overrun_due_dates|
+      next if displayed_issue_ids[issue.parent_id]
+      next unless issue.due_date.present?
+      next if issue.leaf?
+
+      max_due_date = issue.descendants.visible
+                          .select(:id, :due_date, :tracker_id, :status_id)
+                          .where.not(due_date: nil)
+                          .where.not(status_id: IssueStatus.discarded_ids)
+                          .reject { |child|
+                            Tracker.is_exception?(child.tracker_id) ||
+                              Tracker.is_bug?(child.tracker_id) ||
+                              Tracker.is_sidejob?(child.tracker_id)
+                          }
+                          .map(&:due_date)
+                          .max
+
+      overrun_due_dates[issue.id] = max_due_date if max_due_date && max_due_date > issue.due_date
+    end
+  end
+
   # 간트 차트 날짜 범위 계산
-  def gantt_date_range(issues, gantt_opts, due_date)
+  def gantt_date_range(issues, gantt_opts, due_date, extra_due_dates = [])
     before_length = gantt_opts[:before_length] || 20.days
     after_length = gantt_opts[:after_length] || 30.days
 
     min_date = issues.map { |issue| [issue.start_date, issue.begin_time&.to_date] }.flatten.compact.min
     before_length = [ (min_date ? (Date.today - min_date).days + 1.days : 15.days), 15.days ].max unless gantt_opts[:before_length]
 
-    max_date = issues.map { |issue| [issue.due_date, issue.end_time&.to_date] }.flatten.compact.max
+    max_dates = issues.map { |issue| [issue.due_date, issue.end_time&.to_date] }.flatten.compact
+    max_dates.concat(Array(extra_due_dates).compact)
+    max_date = max_dates.max
     after_length = [ (max_date ? (max_date - Date.today).days + 5.days : 5.days), 5.days ].max unless gantt_opts[:after_length]
     after_length = [ after_length, (due_date - Date.today).days + 5.days ].max if due_date
 
@@ -298,7 +328,7 @@ module RedmineTxMilestoneHelper
   module_function :get_version_color, :build_issue_query, :render_issues,
                   :build_bug_issues_filter_params, :link_to_issue_with_id, :link_to_bug_issues_count,
                   :gantt_issue_css_class, :gantt_paused_periods, :gantt_depth_map,
-                  :gantt_date_range, :gantt_prepare_issues
+                  :gantt_top_level_overrun_due_dates, :gantt_date_range, :gantt_prepare_issues
 
   class RedmineTxMilestoneHook < Redmine::Hook::ViewListener
     # 이슈 페이지 action menu에 로드맵 및 일정요약 링크 추가
