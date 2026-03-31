@@ -35,24 +35,40 @@
     #pp result_issues.map { |i| [ i.id, i.due_date ] }
     #pp issues.map { |i| [ i.id, i.due_date ] }
 
-    # self_and_descendants 트리의 일감 중 추정일정이 세팅된 이슈 객체를 업데이트 해 준다.
-    lookup = result_issues.each_with_object({}) { |r, h| h[r.id] = r }
-    issues = issues.map { |orig| lookup[orig.id] || orig }
+	    # self_and_descendants 트리의 일감 중 추정일정이 세팅된 이슈 객체를 업데이트 해 준다.
+	    lookup = result_issues.each_with_object({}) { |r, h| h[r.id] = r }
+	    issues = issues.map { |orig| lookup[orig.id] || orig }
 
-    #pp issues.map { |i| [ i.id, i.due_date ] }
-
-    estimated_due_date = issues.map { |i| i.due_date }.compact.max
-    if estimated_due_date.nil?
-      "-"
-    else
-      ( estimated_due_date.strftime('%Y-%m-%d') + "  (" + (
-          link_to( '일정보기', '#', onclick: "showModal('gantt-modal', 1280, '예상 일정'); return false;") +
-          content_tag(:div, id: 'gantt-modal', style: 'display:none;') do
-            content_tag(:h3, '예상 일정', class: 'title') +
-            content_tag(:iframe, '', src: "/predict/issues/#{issue.id}", style: 'border:0; width:100%; height:600px;')
-          end
-        ) + ")" ).html_safe
-    end
+	    #pp issues.map { |i| [ i.id, i.due_date ] }
+	    skipped_issues = issues.select { |i| i.respond_to?(:auto_schedule_skip_reason) && i.auto_schedule_skip_reason.present? }
+	    if skipped_issues.any?
+	      lines = skipped_issues.first(5).map do |i|
+	        prefix = i.id == issue.id ? "" : "<a class='issue' href='#{issue_path(i)}'>##{i.id}</a> : "
+	        prefix + "<font color='red'>#{ERB::Util.html_escape(i.auto_schedule_skip_reason)}</font>"
+	      end
+	      lines << "..." if skipped_issues.length > 5
+	      "#{lines.join('<br>')}".html_safe
+	    else
+	      estimated_due_date = issues.map { |i| i.due_date }.compact.max
+	      if estimated_due_date.nil?
+	        "-"
+	      else
+	        modal_id = "gantt-modal-#{issue.id}"
+	        frame_id = "gantt-frame-#{issue.id}"
+	        predict_url = "/predict/issues/#{issue.id}"
+	        ( estimated_due_date.strftime('%Y-%m-%d') + "  (" + (
+	            link_to(
+	              '일정보기',
+	              '#',
+	              onclick: "var frame = document.getElementById('#{frame_id}'); if (frame && frame.dataset.loaded !== '1') { frame.src = frame.dataset.src; frame.dataset.loaded = '1'; } showModal('#{modal_id}', 1280, '예상 일정'); return false;"
+	            ) +
+	            content_tag(:div, id: modal_id, style: 'display:none;') do
+	              content_tag(:h3, '예상 일정', class: 'title') +
+	              content_tag(:iframe, '', id: frame_id, src: 'about:blank', data: { src: predict_url, loaded: '0' }, style: 'border:0; width:100%; height:600px;')
+	            end
+	          ) + ")" ).html_safe
+	      end
+	    end
 #    issues.pluck(:id)
     
   else

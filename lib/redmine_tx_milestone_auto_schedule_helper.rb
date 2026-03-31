@@ -34,10 +34,13 @@ module RedmineTxMilestoneAutoScheduleHelper
         end
     end
 
-    # 이슈 자동 스케줄링 유틸리티
-    class AutoScheduler
-        
-        # === PUBLIC API ===
+	    # 이슈 자동 스케줄링 유틸리티
+	    class AutoScheduler
+	        MAX_SCHEDULE_SEARCH_DAYS = 60
+	        LONG_LEAVE_SKIP_REASON = '담당자 휴직중'
+	        SEARCH_LIMIT_SKIP_REASON = "일정 탐색 상한(#{MAX_SCHEDULE_SEARCH_DAYS}일) 초과"
+	        
+	        # === PUBLIC API ===
         
         # 사용자별 일정 정보 분석
         # @param user_id [Integer] 사용자 ID
@@ -115,10 +118,11 @@ module RedmineTxMilestoneAutoScheduleHelper
             assigned_dates[assigned_to_id] = {}
           end
           
-          sorted_issues.each do |issue|
-            next unless issue.estimated_hours.present?
-            
-            # 추정작업시간을 일수로 변환 (8시간 = 1일)
+	          sorted_issues.each do |issue|
+	            issue.auto_schedule_skip_reason = nil if issue.respond_to?(:auto_schedule_skip_reason=)
+	            next unless issue.estimated_hours.present?
+	            
+	            # 추정작업시간을 일수로 변환 (8시간 = 1일)
             work_days = (issue.estimated_hours / 8.0).ceil
             
             # 선행 일감들의 완료일을 고려하여 시작 가능한 날짜 계산
@@ -129,17 +133,26 @@ module RedmineTxMilestoneAutoScheduleHelper
               search_start_date = [search_start_date, latest_predecessor_end_date + 1.day].max
             end
 
-            start_date = find_available_start_date(
-              search_start_date,
-              work_days,
-              all_blocked_dates[issue.assigned_to_id],
-              assigned_dates[issue.assigned_to_id],
-              issue.estimated_hours,
-              issue.assigned_to
-            )
-            due_date = calculate_due_date(start_date, work_days, issue.assigned_to)
+	            start_date, start_skip_reason = find_available_start_date(
+	              search_start_date,
+	              work_days,
+	              all_blocked_dates[issue.assigned_to_id],
+	              assigned_dates[issue.assigned_to_id],
+	              issue.estimated_hours,
+	              issue.assigned_to
+	            )
+	            unless start_date
+	              mark_issue_schedule_skipped(issue, start_skip_reason || SEARCH_LIMIT_SKIP_REASON)
+	              next
+	            end
 
-            #pp [ 'start_date', issue.id, search_start_date.strftime('%Y-%m-%d'), work_days, all_blocked_dates[issue.assigned_to_id], assigned_dates[issue.assigned_to_id], issue.estimated_hours, start_date.strftime('%Y-%m-%d') ]
+	            due_date, due_skip_reason = calculate_due_date(start_date, work_days, issue.assigned_to)
+	            unless due_date
+	              mark_issue_schedule_skipped(issue, due_skip_reason || SEARCH_LIMIT_SKIP_REASON)
+	              next
+	            end
+
+	            #pp [ 'start_date', issue.id, search_start_date.strftime('%Y-%m-%d'), work_days, all_blocked_dates[issue.assigned_to_id], assigned_dates[issue.assigned_to_id], issue.estimated_hours, start_date.strftime('%Y-%m-%d') ]
             
             # 일감 업데이트
             issue.start_date = start_date
@@ -344,63 +357,89 @@ module RedmineTxMilestoneAutoScheduleHelper
             return all_blocked_dates
           end   
     
-          def is_working_day?(date, user = nil)
+	          def working_day_status(date, user = nil)
 
-            # 공휴일 얻어두기
-            if TxBaseHelper::HolidayApi.available?
-              return false if TxBaseHelper::HolidayApi.holiday?(date)
-            end
+	            # 공휴일 얻어두기
+	            if TxBaseHelper::HolidayApi.available?
+	              return :holiday if TxBaseHelper::HolidayApi.holiday?(date)
+	            end
 
-            # 담당자 휴가 확인 (그룹 배정 일감은 제외)
-            if user.is_a?(User) && TxBaseHelper::UserVacationApi.available?
-              return false if TxBaseHelper::UserVacationApi.on_vacation?(user, date)
-            end
+	            # 담당자 휴가 확인 (그룹 배정 일감은 제외)
+	            if user.is_a?(User) && TxBaseHelper::UserVacationApi.available?
+	              work_status = TxBaseHelper::UserVacationApi.work_status(user, date)
+	              return :leave_of_absence if work_status == '휴직'
+	              return :vacation if ['휴가', '병가'].include?(work_status)
+	            end
 
-            return !date.saturday? && !date.sunday?
-          end
-    
-          # 일정 배치 가능한 날짜 확인
-          def find_available_start_date(start_from, work_days, blocked_dates, assigned_dates, estimated_hours, user = nil)
-            current_date = start_from
+	            return :weekend if date.saturday? || date.sunday?
+	            :working
+	          end
 
-            loop do
-              # 3. start_date는 토요일이나 일요일이 되어선 안됨
-              while !is_working_day?(current_date, user)
-                current_date += 1.day
-              end
+	          def is_working_day?(date, user = nil)
+	            working_day_status(date, user) == :working
+	          end
+	    
+	          # 일정 배치 가능한 날짜 확인
+	          def find_available_start_date(start_from, work_days, blocked_dates, assigned_dates, estimated_hours, user = nil)
+	            current_date = start_from
+	            search_deadline = start_from + MAX_SCHEDULE_SEARCH_DAYS.days
 
-              # 현재 날짜부터 작업 기간만큼의 due_date 계산
-              tentative_due_date = calculate_due_date(current_date, work_days, user)
+	            loop do
+	              return [nil, SEARCH_LIMIT_SKIP_REASON] if current_date > search_deadline
 
-              # 4. start_date ~ due_date가 다른 일감의 기간 혹은 blocked_dates와 중첩되지 않는지 확인
-              if !date_range_overlaps?(current_date, tentative_due_date, blocked_dates, assigned_dates, estimated_hours)
-                return current_date
-              end
+	              # 3. start_date는 토요일이나 일요일이 되어선 안됨
+	              while (day_status = working_day_status(current_date, user)) != :working
+	                return [nil, leave_of_absence_skip_reason(user)] if day_status == :leave_of_absence
+	                current_date += 1.day
+	                return [nil, SEARCH_LIMIT_SKIP_REASON] if current_date > search_deadline
+	              end
 
-              # 중첩되면 다음 날로 이동
-              current_date += 1.day
-            end
+	              # 현재 날짜부터 작업 기간만큼의 due_date 계산
+	              tentative_due_date, due_skip_reason = calculate_due_date(current_date, work_days, user, search_deadline)
+	              return [nil, due_skip_reason] unless tentative_due_date
 
-            return nil
-          end
-      
-          # 공휴일/휴가를 고려한 due_date 계산
-          def calculate_due_date(start_date, work_days, user = nil)
-            current_date = start_date
-            remaining_days = work_days - 1 # start_date도 하루로 카운트
+	              # 4. start_date ~ due_date가 다른 일감의 기간 혹은 blocked_dates와 중첩되지 않는지 확인
+	              if !date_range_overlaps?(current_date, tentative_due_date, blocked_dates, assigned_dates, estimated_hours)
+	                return [current_date, nil]
+	              end
 
-            while remaining_days > 0
-              current_date += 1.day
-              # 주말(토요일, 일요일), 공휴일, 휴가는 작업일에 포함하지 않음
-              if is_working_day?(current_date, user)
-                remaining_days -= 1
-              end
-            end
+	              # 중첩되면 다음 날로 이동
+	              current_date += 1.day
+	            end
 
-            current_date
-          end
+	            return [nil, SEARCH_LIMIT_SKIP_REASON]
+	          end
+	      
+	          # 공휴일/휴가를 고려한 due_date 계산
+	          def calculate_due_date(start_date, work_days, user = nil, search_deadline = start_date + MAX_SCHEDULE_SEARCH_DAYS.days)
+	            current_date = start_date
+	            remaining_days = work_days - 1 # start_date도 하루로 카운트
 
-          # 일정 중첩 여부 확인
+	            while remaining_days > 0
+	              current_date += 1.day
+	              return [nil, SEARCH_LIMIT_SKIP_REASON] if current_date > search_deadline
+	              # 주말(토요일, 일요일), 공휴일, 휴가는 작업일에 포함하지 않음
+	              day_status = working_day_status(current_date, user)
+	              return [nil, leave_of_absence_skip_reason(user)] if day_status == :leave_of_absence
+	              if day_status == :working
+	                remaining_days -= 1
+	              end
+	            end
+
+	            [current_date, nil]
+	          end
+
+	          def leave_of_absence_skip_reason(user)
+	            assignee_name = user&.respond_to?(:name) ? user.name : nil
+	            assignee_name.present? ? "#{LONG_LEAVE_SKIP_REASON}: #{assignee_name}" : LONG_LEAVE_SKIP_REASON
+	          end
+
+	          def mark_issue_schedule_skipped(issue, reason)
+	            issue.auto_schedule_skip_reason = reason if issue.respond_to?(:auto_schedule_skip_reason=)
+	            Rails.logger.warn "[RedmineTxMilestone] schedule skipped: #{reason} for issue=#{issue.id}"
+	          end
+
+	          # 일정 중첩 여부 확인
           def date_range_overlaps?(start_date, due_date, blocked_dates, assigned_dates, estimated_hours)
             day_estimated_hours = [8.0, estimated_hours.to_f].min
             (start_date..due_date).any? { |date| 
@@ -497,12 +536,20 @@ module RedmineTxMilestoneAutoScheduleHelper
         
         # 레드마인 기본 working_duration은 estimated_hours를 무시하므로 오버라이드
         # @return [Integer] 작업 소요 일수
-        def working_duration
-          if self.estimated_hours.present?
-            (estimated_hours / 8.0).ceil
-          else
-            super()
-          end
-        end
-    end
-end
+	        def working_duration
+	          if self.estimated_hours.present?
+	            (estimated_hours / 8.0).ceil
+	          else
+	            super()
+	          end
+	        end
+
+	        def auto_schedule_skip_reason
+	          @auto_schedule_skip_reason
+	        end
+
+	        def auto_schedule_skip_reason=(reason)
+	          @auto_schedule_skip_reason = reason
+	        end
+	    end
+	end
