@@ -187,6 +187,9 @@ module RedmineTxMilestoneHelper
 
   # 일감 상태에 따른 CSS 클래스명 반환 (인라인 스타일 대체)
   def gantt_issue_css_class(issue)
+    overdue_due_date = issue.due_date && issue.due_date < Date.today
+    overdue_start_date = IssueStatus.is_new?(issue.status_id) && issue.start_date && issue.start_date < Date.today
+
     if IssueStatus.is_postponed?(issue.status_id)
       'issue-postponed'
     elsif IssueStatus.is_discarded?(issue.status_id)
@@ -194,9 +197,13 @@ module RedmineTxMilestoneHelper
     elsif IssueStatus.is_implemented?(issue.status_id)
       'issue-implemented'
     elsif IssueStatus.is_in_progress?(issue.status_id)
-      'issue-in-progress'
+      if overdue_due_date
+        'issue-in-progress issue-overdue'
+      else
+        'issue-in-progress'
+      end
     else
-      if issue.due_date && issue.due_date < Date.today
+      if overdue_due_date || overdue_start_date
         'issue-overdue'
       else
         'issue-default'
