@@ -38,13 +38,13 @@
 
 <%
     main_issues = Issue.where( fixed_version_id: selected_version.id ).where( tracker_id: Tracker.roadmap_trackers_ids ).where.not( status_id: IssueStatus.discarded_ids ).to_a
-    # implemented 상태는 맨 아래로 내리고, 그 안에서는 마감일 없음 우선, 마감일 내림차순,
+    # implemented 상태는 맨 아래로 내리고, 그 안에서는 마감일 없음 우선, 마감일 오름차순,
     # 시작일 오름차순, 마지막으로 done_ratio 오름차순으로 정렬한다.
     main_issues.sort_by! do |issue|
       [
         IssueStatus.is_implemented?(issue.status_id) ? 1 : 0,
         issue.due_date.nil? ? 0 : 1,
-        issue.due_date ? -issue.due_date.jd : 0,
+        issue.due_date ? issue.due_date.jd : 0,
         issue.start_date ? issue.start_date.jd : Float::INFINITY,
         issue.done_ratio
       ]
