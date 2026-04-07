@@ -18,7 +18,13 @@
   vacation_info ||= UserStatusHelper.get_user_vacation_info( gantt_start_date..gantt_end_date )
   
   issues = Issue.where( '( worker_id = ? AND ( ( begin_time >= ? OR end_time >= ? ) OR ( begin_time IS NOT NULL AND end_time IS NULL ) ) ) OR 
-                          ( assigned_to_id = ? AND ( ( ( start_date IS NOT NULL AND start_date <= (?) ) OR ( due_date IS NOT NULL AND due_date <= (?) ) ) AND status_id NOT IN (?) ) )', user_id, gantt_start_date, gantt_start_date, user_id, gantt_end_date, gantt_end_date, IssueStatus.implemented_ids ).order(begin_time: :desc, start_date: :asc).select{ |issue| !IssueStatus.is_discarded?( issue.status_id ) && !IssueStatus.is_postponed?( issue.status_id ) }
+                          ( assigned_to_id = ? AND ( ( ( start_date IS NOT NULL AND start_date <= (?) ) OR ( due_date IS NOT NULL AND due_date <= (?) ) ) AND status_id NOT IN (?) ) )', user_id, gantt_start_date, gantt_start_date, user_id, gantt_end_date, gantt_end_date, IssueStatus.implemented_ids )
+                .order(begin_time: :desc, start_date: :asc)
+                .select do |issue|
+                  !IssueStatus.is_discarded?(issue.status_id) &&
+                    !IssueStatus.is_postponed?(issue.status_id) &&
+                    !Tracker.is_exception?(issue.tracker_id)
+                end
 
   not_yet_started = issues.select { |i| i.begin_time == nil }
   issues = not_yet_started + ( issues - not_yet_started )
