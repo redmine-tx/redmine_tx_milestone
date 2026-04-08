@@ -37,25 +37,42 @@
 <div class="tab-content">
 
 <%
-    main_issues = Issue.where( fixed_version_id: selected_version.id ).where( tracker_id: Tracker.roadmap_trackers_ids ).where.not( status_id: IssueStatus.discarded_ids ).to_a
+    main_issues = Issue.where(fixed_version_id: selected_version.id).where(tracker_id: Tracker.roadmap_trackers_ids).where.not(status_id: IssueStatus.discarded_ids).to_a
+    selected_major_issue_tags = RedmineTxMilestoneHelper.major_issue_tag_names
+    major_issues = selected_major_issue_tags.present? ? milestone_major_issues(main_issues) : []
+    major_issue_ids = major_issues.map(&:id)
+    remaining_main_issues = main_issues.reject { |issue| major_issue_ids.include?(issue.id) }
+
+    sort_issues = lambda do |issues|
+      issues.sort_by! do |issue|
+        implemented = IssueStatus.is_implemented?(issue.status_id)
+        [
+          implemented ? 1 : 0,
+          issue.due_date.nil? ? 0 : 1,
+          issue.due_date ? (implemented ? -issue.due_date.jd : issue.due_date.jd) : 0,
+          issue.start_date ? issue.start_date.jd : Float::INFINITY,
+          issue.done_ratio
+        ]
+      end
+    end
+
     # implemented 상태는 맨 아래로 내린다.
     # implemented 아닌 일감은 마감일 없음 우선, 마감일 오름차순으로,
     # implemented 일감은 마감일 없음 우선, 마감일 내림차순으로 정렬한다.
     # 이후 시작일 오름차순, 마지막으로 done_ratio 오름차순을 적용한다.
-    main_issues.sort_by! do |issue|
-      implemented = IssueStatus.is_implemented?(issue.status_id)
-      [
-        implemented ? 1 : 0,
-        issue.due_date.nil? ? 0 : 1,
-        issue.due_date ? (implemented ? -issue.due_date.jd : issue.due_date.jd) : 0,
-        issue.start_date ? issue.start_date.jd : Float::INFINITY,
-        issue.done_ratio
-      ]
-    end
+    sort_issues.call(major_issues)
+    sort_issues.call(remaining_main_issues)
 %>
 <h3><%= link_to selected_version.name.to_s, "/versions/#{selected_version.id}/edit" %></h3>
+<% if major_issues.any? %>
 <div class="version-box">
-    <%= render :partial => 'milestone/gantt_chart', locals: { title: '메인 일감', issues: main_issues, due_date: selected_version.effective_date, date_marks: selected_version.marks, gantt_opts: { show_status_history: false } } %>
+    <%= render :partial => 'milestone/gantt_chart', locals: { title: '주요 일감', issues: major_issues, due_date: selected_version.effective_date, date_marks: selected_version.marks, gantt_opts: { show_status_history: false } } %>
 </div>
+<% end %>
+<% if remaining_main_issues.any? %>
+<div class="version-box">
+    <%= render :partial => 'milestone/gantt_chart', locals: { title: '메인 일감', issues: remaining_main_issues, due_date: selected_version.effective_date, date_marks: selected_version.marks, gantt_opts: { show_status_history: false } } %>
+</div>
+<% end %>
 
 </div>

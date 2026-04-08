@@ -7,6 +7,27 @@
     <span class="description">레드마인의 기본 자동 스케줄링 기능(set_issue_to_dates)을 설정에 따라 선택적으로 비활성화합니다. <font color="red" style="font-weight: bold;">이 플러그인의 자체 AutoScheduler 로직과 충돌을 방지하기 위해 사용되므로 특별한 경우가 아니면 체크하지 마세요.</font></span>
   </p>
 
+  <% if RedmineTxMilestoneHelper.major_issue_tags_plugin_available? %>
+    <% selected_major_issue_tags = RedmineTxMilestoneHelper.major_issue_tag_names(@settings) %>
+    <% available_major_issue_tags = (RedmineTxMilestoneHelper.available_major_issue_tags + selected_major_issue_tags).uniq %>
+
+    <br>
+
+    <h3>주요 일감 설정</h3>
+    <p>
+      <label for="settings_setting_milestone_major_issue_tags">주요 일감 태그</label><br>
+      <%= hidden_field_tag "settings[setting_milestone_major_issue_tags][]", "", id: nil %>
+      <%= select_tag "settings[setting_milestone_major_issue_tags][]",
+                     options_for_select(available_major_issue_tags.map { |tag| [tag, tag] }, selected_major_issue_tags),
+                     multiple: true,
+                     id: 'settings_setting_milestone_major_issue_tags',
+                     size: [[available_major_issue_tags.size, 6].max, 12].min,
+                     disabled: available_major_issue_tags.blank?,
+                     style: 'min-width: 320px; width: 100%; max-width: 480px;' %>
+      <span class="description">선택한 태그 중 하나라도 포함한 일감만 주요 일감으로 간주합니다. 비워두면 기존 기준을 사용합니다.</span>
+    </p>
+  <% end %>
+
   <br>
 
   <h3>마감기한 설정</h3>

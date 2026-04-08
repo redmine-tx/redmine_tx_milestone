@@ -2,6 +2,44 @@ module RedmineTxMilestoneHelper
   # TxBaseHelper의 일감 테이블 헬퍼 메서드 사용
   include TxBaseHelper
 
+  def self.major_issue_tags_plugin_available?
+    Redmine::Plugin.respond_to?(:installed?) &&
+      Redmine::Plugin.installed?(:redmineup_tags) &&
+      Issue.respond_to?(:all_tags) &&
+      Issue.respond_to?(:tagged_with)
+  rescue StandardError
+    false
+  end
+
+  def self.major_issue_tag_names(settings = Setting.plugin_redmine_tx_milestone)
+    Array(settings&.[]('setting_milestone_major_issue_tags'))
+      .map(&:to_s)
+      .reject(&:blank?)
+      .uniq
+  end
+
+  def self.available_major_issue_tags
+    return [] unless major_issue_tags_plugin_available?
+
+    Issue.all_tags(sort_by: "#{Redmineup::Tag.table_name}.name", order: 'ASC').map(&:name)
+  rescue StandardError
+    []
+  end
+
+  def milestone_major_issues(issues)
+    filtered_issues = block_given? ? Array(issues).select { |issue| yield(issue) } : Array(issues)
+    selected_tags = RedmineTxMilestoneHelper.major_issue_tag_names
+    return filtered_issues if filtered_issues.blank? || selected_tags.blank?
+    return filtered_issues unless RedmineTxMilestoneHelper.major_issue_tags_plugin_available?
+
+    tagged_issue_ids = Issue.tagged_with(
+      selected_tags,
+      conditions: ["#{Issue.table_name}.id IN (?)", filtered_issues.map(&:id)]
+    ).map(&:id)
+
+    filtered_issues.select { |issue| tagged_issue_ids.include?(issue.id) }
+  end
+
   # 버전별 색상 코드 반환 메소드
   # effective_date 기준으로 남은 기간에 따라 다른 색상 반환
   def get_version_color(version)
