@@ -1,4 +1,5 @@
 require File.expand_path('../test_helper', __dir__)
+require 'ostruct'
 
 class RedmineTxMilestoneHelperTest < ActiveSupport::TestCase
   include RedmineTxMilestoneHelper
@@ -70,5 +71,62 @@ class RedmineTxMilestoneHelperTest < ActiveSupport::TestCase
     issues = milestone_major_issues([@issue_1, @issue_2])
 
     assert_equal [@issue_2.id], issues.map(&:id)
+  end
+
+  def test_gantt_child_schedule_warning_map_marks_ancestor_when_descendant_is_missing_due_date
+    parent = gantt_issue_stub(id: 100, tracker_id: :work, status_id: :open)
+    ignored_sidejob_child = gantt_issue_stub(id: 201, tracker_id: :sidejob, status_id: :open, start_date: nil, due_date: nil, ancestor_id: 100)
+    ignored_implemented_child = gantt_issue_stub(id: 202, tracker_id: :work, status_id: :implemented, start_date: nil, due_date: nil, ancestor_id: 100)
+    ignored_no_start_date_child = gantt_issue_stub(id: 203, tracker_id: :work, status_id: :open, start_date: nil, due_date: Date.today, ancestor_id: 100)
+    triggering_child = gantt_issue_stub(id: 204, tracker_id: :work, status_id: :open, start_date: Date.today, due_date: nil, ancestor_id: 100)
+
+    with_gantt_schedule_stubs do
+      warning_map = gantt_child_schedule_warning_map(
+        [parent],
+        [ignored_sidejob_child, ignored_implemented_child, ignored_no_start_date_child, triggering_child]
+      )
+
+      assert_equal true, warning_map[100]
+      assert_equal [100], warning_map.keys
+    end
+  end
+
+  def test_gantt_prepare_issues_keeps_own_due_date_warning_separate_from_child_schedule_warning
+    parent = gantt_issue_stub(id: 100, tracker_id: :work, status_id: :open, due_date: Date.today)
+    descendant = gantt_issue_stub(id: 200, tracker_id: :work, status_id: :open, start_date: nil, due_date: nil, ancestor_id: 100)
+
+    with_gantt_schedule_stubs do
+      prepared = gantt_prepare_issues([parent, descendant], { 100 => 0, 200 => 1 }, [descendant])
+
+      parent_info = prepared.find { |item| item[:issue].id == 100 }
+      descendant_info = prepared.find { |item| item[:issue].id == 200 }
+
+      assert_equal true, parent_info[:show_missing_child_schedule_warning]
+      assert_equal false, parent_info[:show_no_due_date_warning]
+      assert_equal false, descendant_info[:show_missing_child_schedule_warning]
+      assert_equal false, descendant_info[:show_no_due_date_warning]
+    end
+  end
+
+  private
+
+  def gantt_issue_stub(id:, tracker_id:, status_id:, parent_id: nil, start_date: Date.today, due_date: Date.today, ancestor_id: nil)
+    OpenStruct.new(
+      id: id,
+      tracker_id: tracker_id,
+      status_id: status_id,
+      parent_id: parent_id,
+      start_date: start_date,
+      due_date: due_date,
+      ancestor_id: ancestor_id
+    )
+  end
+
+  def with_gantt_schedule_stubs(&block)
+    Tracker.stub(:is_exception?, ->(tracker_id) { tracker_id == :exception }) do
+      Tracker.stub(:is_sidejob?, ->(tracker_id) { tracker_id == :sidejob }) do
+        IssueStatus.stub(:is_implemented?, ->(status_id) { status_id == :implemented }, &block)
+      end
+    end
   end
 end

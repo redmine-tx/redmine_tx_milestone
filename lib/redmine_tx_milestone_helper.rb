@@ -358,14 +358,58 @@ module RedmineTxMilestoneHelper
     }
   end
 
+  def gantt_schedule_required?(issue)
+    !Tracker.is_exception?(issue.tracker_id) &&
+      !Tracker.is_sidejob?(issue.tracker_id) &&
+      !IssueStatus.is_implemented?(issue.status_id)
+  end
+
+  def gantt_missing_due_date?(issue)
+    issue.due_date.nil?
+  end
+
+  def gantt_child_schedule_warning_map(issues, descendant_issues = nil)
+    displayed_issue_ids = issues.map(&:id)
+    return {} if displayed_issue_ids.empty?
+
+    descendant_issues ||= Issue.visible
+                              .joins(
+                                "JOIN #{Issue.table_name} ancestors" \
+                                " ON ancestors.root_id = #{Issue.table_name}.root_id" \
+                                " AND ancestors.lft <= #{Issue.table_name}.lft" \
+                                " AND ancestors.rgt >= #{Issue.table_name}.rgt"
+                              )
+                              .where(ancestors: { id: displayed_issue_ids })
+                              .where.not("#{Issue.table_name}.id = ancestors.id")
+                              .select(
+                                "#{Issue.table_name}.id",
+                                "#{Issue.table_name}.tracker_id",
+                                "#{Issue.table_name}.status_id",
+                                "#{Issue.table_name}.start_date",
+                                "#{Issue.table_name}.due_date",
+                                "ancestors.id AS ancestor_id"
+                              )
+                              .to_a
+
+    descendant_issues.each_with_object({}) do |descendant, warning_map|
+      next unless gantt_schedule_required?(descendant)
+      next unless gantt_missing_due_date?(descendant)
+
+      warning_map[descendant.ancestor_id] = true
+    end
+  end
+
   # 간트 차트용 이슈 배열 생성
-  def gantt_prepare_issues(issues, depth_map)
+  def gantt_prepare_issues(issues, depth_map, descendant_issues = nil)
+    child_schedule_warning_map = gantt_child_schedule_warning_map(issues, descendant_issues)
+
     issues.map do |issue|
       show_no_due_date_warning = issue.due_date.nil? && !Tracker.is_exception?(issue.tracker_id) && !IssueStatus.is_implemented?(issue.status_id)
       {
         issue: issue,
         depth: depth_map[issue.id] || 0,
-        show_no_due_date_warning: show_no_due_date_warning
+        show_no_due_date_warning: show_no_due_date_warning,
+        show_missing_child_schedule_warning: child_schedule_warning_map[issue.id] || false
       }
     end
   end
@@ -373,7 +417,9 @@ module RedmineTxMilestoneHelper
   module_function :get_version_color, :build_issue_query, :render_issues,
                   :build_bug_issues_filter_params, :link_to_issue_with_id, :link_to_bug_issues_count,
                   :gantt_issue_css_class, :gantt_paused_periods, :gantt_depth_map,
-                  :gantt_top_level_overrun_due_dates, :gantt_date_range, :gantt_prepare_issues
+                  :gantt_top_level_overrun_due_dates, :gantt_date_range,
+                  :gantt_schedule_required?, :gantt_missing_due_date?,
+                  :gantt_child_schedule_warning_map, :gantt_prepare_issues
 
   class RedmineTxMilestoneHook < Redmine::Hook::ViewListener
     # 이슈 페이지 action menu에 로드맵 및 일정요약 링크 추가
