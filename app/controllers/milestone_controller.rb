@@ -83,9 +83,12 @@ class MilestoneController < ApplicationController
         saved_count = 0
         result_issues.each do |ri|
           issue = Issue.find(ri.id)
-          issue.start_date = ri.start_date
-          issue.due_date = ri.due_date
-          saved_count += 1 if issue.save
+          saved_count += 1 if RedmineTxMilestone::IssueScheduleWriteService.apply(
+            issue: issue,
+            start_date: ri.start_date,
+            due_date: ri.due_date,
+            user: User.current
+          )
         end
 
         # 최상위 부모 일감의 완료일을 자식 중 가장 늦은 날짜로 업데이트
@@ -95,8 +98,12 @@ class MilestoneController < ApplicationController
         end
         latest_due_date = top_issue.self_and_descendants.map(&:due_date).compact.max
         if latest_due_date.present? && (top_issue.due_date.nil? || top_issue.due_date < latest_due_date)
-          top_issue.due_date = latest_due_date
-          top_issue.save
+          RedmineTxMilestone::IssueScheduleWriteService.apply(
+            issue: top_issue,
+            start_date: top_issue.start_date,
+            due_date: latest_due_date,
+            user: User.current
+          )
         end
 
         render json: {
@@ -194,12 +201,12 @@ class MilestoneController < ApplicationController
 
           issue_data.each do |data|
             issue = Issue.find(data['id'])
-            issue.start_date = Date.parse(data['start_date'])
-            issue.due_date = Date.parse(data['due_date'])
-            
-            if issue.save
-              saved_count += 1
-            end
+            saved_count += 1 if RedmineTxMilestone::IssueScheduleWriteService.apply(
+              issue: issue,
+              start_date: Date.parse(data['start_date']),
+              due_date: Date.parse(data['due_date']),
+              user: User.current
+            )
           end
           
           flash[:notice] = "#{saved_count}개 일감의 일정이 확정되었습니다."
