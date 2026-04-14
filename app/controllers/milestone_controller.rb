@@ -270,9 +270,11 @@ class MilestoneController < ApplicationController
             next unless max_child_due.present?
             next unless issue.due_date.nil? || issue.due_date < max_child_due
 
-            # update_column으로 콜백/검증을 우회하여 직접 업데이트
-            issue.update_column(:due_date, max_child_due)
-            updated_count += 1
+            updated_count += 1 if RedmineTxMilestone::IssueDueDateSyncService.sync_due_date!(
+              issue: issue,
+              due_date: max_child_due,
+              user: User.current
+            )
           end
 
           render json: {

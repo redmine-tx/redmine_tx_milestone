@@ -41,6 +41,7 @@ end
 
 Rails.application.config.after_initialize do
   require_dependency File.expand_path('../lib/redmine_tx_milestone/settings_migration', __FILE__)
+  require_dependency File.expand_path('../lib/redmine_tx_milestone/issue_due_date_sync_service', __FILE__)
   require_dependency File.expand_path('../lib/redmine_tx_milestone/summary_service', __FILE__)
   require_dependency File.expand_path('../lib/redmine_tx_milestone_helper', __FILE__)
 
