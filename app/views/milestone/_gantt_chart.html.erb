@@ -351,6 +351,8 @@
                   line_classes << line_state_classes if line_state_classes.present?
                   planning_segments = planning_segments_map[issue.id] || []
                   visible_line_end_date = [line_end_date, end_date].min
+                  planning_edge_classes = gantt_schedule_line_edge_css_classes(planning_segments, line_start_date, visible_line_end_date)
+                  line_classes.concat(planning_edge_classes.split) if planning_edge_classes.present?
                 %>
                 <div class="<%= line_classes.join(' ') %>" style="width: <%=line_width %>px; top: <%= cell_height -3 %>px;" data-issue-tooltip="<%= issue.id %>"></div>
                 <% planning_segments.each do |segment| %>

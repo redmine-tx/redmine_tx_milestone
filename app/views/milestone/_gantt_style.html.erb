@@ -243,6 +243,10 @@
     background-color: #fa0;
   }
 
+  .gantt-wrapper .arrow-line.planning {
+    background-color: #33b5ff;
+  }
+
   .gantt-wrapper .arrow-line-planning-segment {
     position: absolute;
     height: 3px;
@@ -291,6 +295,11 @@
     height: 4px;
     z-index: 10;
     background-color: inherit;
+  }
+
+  .gantt-wrapper .arrow-line.planning-before.show-before::before,
+  .gantt-wrapper .arrow-line.planning-after.show-after::after {
+    background-color: #33b5ff;
   }
 
   /* highlight-column: 특정 기간(예: 현재 주) 강조 표시 */

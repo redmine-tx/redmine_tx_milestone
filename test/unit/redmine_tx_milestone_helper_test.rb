@@ -169,6 +169,52 @@ class RedmineTxMilestoneHelperTest < ActiveSupport::TestCase
     end
   end
 
+  def test_gantt_schedule_line_css_classes_returns_planning_for_planning_issue
+    planning_issue = gantt_issue_stub(id: 400, tracker_id: :planning, status_id: :open)
+
+    with_gantt_schedule_stubs do
+      assert_equal 'planning', gantt_schedule_line_css_classes(planning_issue)
+    end
+  end
+
+  def test_gantt_schedule_line_css_classes_keeps_virtual_priority_over_planning
+    planning_issue = gantt_issue_stub(id: 401, tracker_id: :planning, status_id: :open)
+
+    with_gantt_schedule_stubs do
+      assert_equal 'virtual', gantt_schedule_line_css_classes(planning_issue, [401])
+    end
+  end
+
+  def test_gantt_schedule_line_edge_css_classes_marks_both_edges_when_planning_reaches_visible_bounds
+    planning_segments = [
+      { start_date: Date.new(2026, 4, 8), due_date: Date.new(2026, 4, 12) }
+    ]
+
+    assert_equal(
+      'planning-before planning-after',
+      gantt_schedule_line_edge_css_classes(
+        planning_segments,
+        Date.new(2026, 4, 9),
+        Date.new(2026, 4, 12)
+      )
+    )
+  end
+
+  def test_gantt_schedule_line_edge_css_classes_ignores_segments_that_do_not_touch_visible_edges
+    planning_segments = [
+      { start_date: Date.new(2026, 4, 10), due_date: Date.new(2026, 4, 11) }
+    ]
+
+    assert_equal(
+      '',
+      gantt_schedule_line_edge_css_classes(
+        planning_segments,
+        Date.new(2026, 4, 9),
+        Date.new(2026, 4, 12)
+      )
+    )
+  end
+
   def test_gantt_parent_planning_segments_map_treats_due_only_planning_child_as_single_day_segment
     parent = gantt_issue_stub(id: 100, tracker_id: :work, status_id: :open)
     planning_child = gantt_issue_stub(id: 302, tracker_id: :planning, status_id: :open, parent_id: 100, start_date: nil, due_date: Date.new(2026, 4, 9))

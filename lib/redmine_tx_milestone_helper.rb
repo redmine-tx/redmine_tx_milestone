@@ -371,7 +371,31 @@ module RedmineTxMilestoneHelper
   end
 
   def gantt_schedule_line_css_classes(issue, virtual_ids = [])
-    Array(virtual_ids).include?(issue.id) ? 'virtual' : ''
+    return 'virtual' if Array(virtual_ids).include?(issue.id)
+    return 'planning' if Tracker.respond_to?(:is_planning?) && Tracker.is_planning?(issue.tracker_id)
+
+    ''
+  end
+
+  def gantt_schedule_line_edge_css_classes(planning_segments, line_start_date, visible_line_end_date)
+    return '' unless line_start_date.present? && visible_line_end_date.present?
+
+    visible_segments = Array(planning_segments).filter_map do |segment|
+      segment_start = [segment[:start_date], line_start_date].compact.max
+      segment_end = [segment[:due_date], visible_line_end_date].compact.min
+      next unless segment_start.present? && segment_end.present?
+      next if segment_start > segment_end
+
+      {
+        start_date: segment_start,
+        due_date: segment_end
+      }
+    end
+
+    classes = []
+    classes << 'planning-before' if visible_segments.any? { |segment| segment[:start_date] == line_start_date }
+    classes << 'planning-after' if visible_segments.any? { |segment| segment[:due_date] == visible_line_end_date }
+    classes.join(' ')
   end
 
   def gantt_parent_planning_segments_map(issues, descendant_issues = nil)
@@ -524,7 +548,8 @@ module RedmineTxMilestoneHelper
                   :gantt_issue_css_class, :gantt_paused_periods, :gantt_depth_map,
                   :gantt_top_level_overrun_due_dates, :gantt_date_range,
                   :gantt_schedule_required?, :gantt_missing_due_date?,
-                  :gantt_schedule_line_css_classes, :gantt_parent_planning_segments_map,
+                  :gantt_schedule_line_css_classes, :gantt_schedule_line_edge_css_classes,
+                  :gantt_parent_planning_segments_map,
                   :gantt_visible_descendants_for,
                   :gantt_merge_date_segments,
                   :gantt_child_schedule_warning_map, :gantt_child_schedule_warning_details_map,
