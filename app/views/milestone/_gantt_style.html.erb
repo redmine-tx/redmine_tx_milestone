@@ -2,7 +2,8 @@
   /* gantt-wrapper: 간트 차트 전체 컨테이너의 스타일 초기화 */
   .gantt-wrapper {
     all: initial; /* 모든 CSS 속성을 초기값으로 설정 (상속 방지) */
-    --planning-line-color: #4dc3ff;
+    --planning-line-color: #33b5ff;
+    --planning-outline-color: rgba(255, 255, 255, 0.65);
     * {
       all: unset; /* 자식 요소들의 모든 CSS 속성을 상속받거나 초기값으로 설정 */
     }
@@ -250,9 +251,9 @@
 
   .gantt-wrapper .arrow-line-planning-segment {
     position: absolute;
-    height: 4px;
+    height: 3px;
     background-color: var(--planning-line-color);
-    border-radius: 1px;
+    outline: 1px solid var(--planning-outline-color);
     z-index: 16;
     pointer-events: none;
   }
@@ -298,11 +299,12 @@
     background-color: inherit;
   }
 
+  .gantt-wrapper .arrow-line.planning.show-before::before,
+  .gantt-wrapper .arrow-line.planning.show-after::after,
   .gantt-wrapper .arrow-line.planning-before.show-before::before,
   .gantt-wrapper .arrow-line.planning-after.show-after::after {
-    width: 3px;
+    width: 2px;
     background-color: var(--planning-line-color);
-    border-radius: 1px;
   }
 
   /* highlight-column: 특정 기간(예: 현재 주) 강조 표시 */
