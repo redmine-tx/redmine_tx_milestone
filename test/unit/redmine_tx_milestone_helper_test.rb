@@ -108,6 +108,30 @@ class RedmineTxMilestoneHelperTest < ActiveSupport::TestCase
     end
   end
 
+  def test_gantt_schedule_line_css_classes_marks_child_planning_issue
+    planning_child = gantt_issue_stub(id: 300, tracker_id: :planning, status_id: :open, parent_id: 100)
+
+    with_gantt_schedule_stubs do
+      assert_equal 'planning', gantt_schedule_line_css_classes(planning_child)
+    end
+  end
+
+  def test_gantt_schedule_line_css_classes_marks_due_only_child_planning_issue
+    planning_child = gantt_issue_stub(id: 301, tracker_id: :planning, status_id: :open, parent_id: 100, start_date: nil, due_date: Date.today)
+
+    with_gantt_schedule_stubs do
+      assert_equal 'planning planning-due-only', gantt_schedule_line_css_classes(planning_child)
+    end
+  end
+
+  def test_gantt_schedule_line_css_classes_keeps_planning_priority_over_virtual
+    planning_child = gantt_issue_stub(id: 302, tracker_id: :planning, status_id: :open, parent_id: 100)
+
+    with_gantt_schedule_stubs do
+      assert_equal 'planning', gantt_schedule_line_css_classes(planning_child, [302])
+    end
+  end
+
   private
 
   def gantt_issue_stub(id:, tracker_id:, status_id:, parent_id: nil, start_date: Date.today, due_date: Date.today, ancestor_id: nil)
@@ -125,7 +149,9 @@ class RedmineTxMilestoneHelperTest < ActiveSupport::TestCase
   def with_gantt_schedule_stubs(&block)
     Tracker.stub(:is_exception?, ->(tracker_id) { tracker_id == :exception }) do
       Tracker.stub(:is_sidejob?, ->(tracker_id) { tracker_id == :sidejob }) do
-        IssueStatus.stub(:is_implemented?, ->(status_id) { status_id == :implemented }, &block)
+        Tracker.stub(:is_planning?, ->(tracker_id) { tracker_id == :planning }) do
+          IssueStatus.stub(:is_implemented?, ->(status_id) { status_id == :implemented }, &block)
+        end
       end
     end
   end

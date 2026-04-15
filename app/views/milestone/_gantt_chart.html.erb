@@ -340,7 +340,14 @@
 
               <!-- 예정 이슈 -->
               <% if show_line && date == line_start_date %>
-                <div class="arrow-line<%= show_line_before ? ' show-before' : '' %> <%= show_line_after ? ' show-after' : '' %>" style="width: <%=line_width %>px; top: <%= cell_height -3 %>px;<% if defined?(virtual_ids) && virtual_ids.include?(issue.id) %> background-color: #fa0;<% end %>" data-issue-tooltip="<%= issue.id %>"></div>
+                <%
+                  line_classes = ['arrow-line']
+                  line_classes << 'show-before' if show_line_before
+                  line_classes << 'show-after' if show_line_after
+                  line_state_classes = gantt_schedule_line_css_classes(issue, virtual_ids)
+                  line_classes << line_state_classes if line_state_classes.present?
+                %>
+                <div class="<%= line_classes.join(' ') %>" style="width: <%=line_width %>px; top: <%= cell_height -3 %>px;" data-issue-tooltip="<%= issue.id %>"></div>
                 <% if overrun_extension_width > 0 %>
                   <div class="arrow-line-overrun" style="left: <%= line_width %>px; width: <%= overrun_extension_width %>px; top: <%= cell_height -3 %>px;" data-issue-tooltip="<%= issue.id %>"></div>
                 <% end %>

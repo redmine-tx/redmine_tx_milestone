@@ -368,6 +368,25 @@ module RedmineTxMilestoneHelper
     issue.due_date.nil?
   end
 
+  def gantt_planning_line?(issue)
+    issue.parent_id.present? &&
+      Tracker.respond_to?(:is_planning?) &&
+      Tracker.is_planning?(issue.tracker_id)
+  end
+
+  def gantt_schedule_line_css_classes(issue, virtual_ids = [])
+    classes = []
+
+    if gantt_planning_line?(issue)
+      classes << 'planning'
+      classes << 'planning-due-only' if issue.start_date.blank? && issue.due_date.present?
+    elsif Array(virtual_ids).include?(issue.id)
+      classes << 'virtual'
+    end
+
+    classes.join(' ')
+  end
+
   def gantt_child_schedule_warning_map(issues, descendant_issues = nil)
     displayed_issue_ids = issues.map(&:id)
     return {} if displayed_issue_ids.empty?
@@ -419,6 +438,7 @@ module RedmineTxMilestoneHelper
                   :gantt_issue_css_class, :gantt_paused_periods, :gantt_depth_map,
                   :gantt_top_level_overrun_due_dates, :gantt_date_range,
                   :gantt_schedule_required?, :gantt_missing_due_date?,
+                  :gantt_planning_line?, :gantt_schedule_line_css_classes,
                   :gantt_child_schedule_warning_map, :gantt_prepare_issues
 
   class RedmineTxMilestoneHook < Redmine::Hook::ViewListener
