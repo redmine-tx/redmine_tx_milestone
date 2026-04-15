@@ -78,16 +78,62 @@ class RedmineTxMilestoneHelperTest < ActiveSupport::TestCase
     ignored_sidejob_child = gantt_issue_stub(id: 201, tracker_id: :sidejob, status_id: :open, start_date: nil, due_date: nil, ancestor_id: 100)
     ignored_implemented_child = gantt_issue_stub(id: 202, tracker_id: :work, status_id: :implemented, start_date: nil, due_date: nil, ancestor_id: 100)
     ignored_no_start_date_child = gantt_issue_stub(id: 203, tracker_id: :work, status_id: :open, start_date: nil, due_date: Date.today, ancestor_id: 100)
-    triggering_child = gantt_issue_stub(id: 204, tracker_id: :work, status_id: :open, start_date: Date.today, due_date: nil, ancestor_id: 100)
+    ignored_discarded_child = gantt_issue_stub(id: 204, tracker_id: :work, status_id: :discarded, start_date: nil, due_date: nil, ancestor_id: 100)
+    ignored_postponed_child = gantt_issue_stub(id: 205, tracker_id: :work, status_id: :postponed, start_date: nil, due_date: nil, ancestor_id: 100)
+    triggering_child = gantt_issue_stub(id: 206, tracker_id: :work, status_id: :open, start_date: Date.today, due_date: nil, ancestor_id: 100)
 
     with_gantt_schedule_stubs do
       warning_map = gantt_child_schedule_warning_map(
         [parent],
-        [ignored_sidejob_child, ignored_implemented_child, ignored_no_start_date_child, triggering_child]
+        [
+          ignored_sidejob_child,
+          ignored_implemented_child,
+          ignored_no_start_date_child,
+          ignored_discarded_child,
+          ignored_postponed_child,
+          triggering_child
+        ]
       )
 
       assert_equal true, warning_map[100]
       assert_equal [100], warning_map.keys
+    end
+  end
+
+  def test_gantt_child_schedule_warning_map_ignores_discarded_and_postponed_descendants_without_due_date
+    parent = gantt_issue_stub(id: 100, tracker_id: :work, status_id: :open)
+    discarded_child = gantt_issue_stub(id: 201, tracker_id: :work, status_id: :discarded, start_date: nil, due_date: nil, ancestor_id: 100)
+    postponed_child = gantt_issue_stub(id: 202, tracker_id: :work, status_id: :postponed, start_date: nil, due_date: nil, ancestor_id: 100)
+
+    with_gantt_schedule_stubs do
+      warning_map = gantt_child_schedule_warning_map(
+        [parent],
+        [discarded_child, postponed_child]
+      )
+
+      assert_equal({}, warning_map)
+    end
+  end
+
+  def test_gantt_child_schedule_warning_details_map_lists_issue_id_subject_and_reason
+    parent = gantt_issue_stub(id: 100, tracker_id: :work, status_id: :open)
+    triggering_child = gantt_issue_stub(
+      id: 201,
+      tracker_id: :work,
+      status_id: :open,
+      subject: '완료기한 없는 자식 일감',
+      start_date: Date.today,
+      due_date: nil,
+      ancestor_id: 100
+    )
+
+    with_gantt_schedule_stubs do
+      warning_details_map = gantt_child_schedule_warning_details_map([parent], [triggering_child])
+
+      assert_equal(
+        [{ id: 201, subject: '완료기한 없는 자식 일감', reason: '완료기한 미기입' }],
+        warning_details_map[100]
+      )
     end
   end
 
@@ -102,8 +148,10 @@ class RedmineTxMilestoneHelperTest < ActiveSupport::TestCase
       descendant_info = prepared.find { |item| item[:issue].id == 200 }
 
       assert_equal true, parent_info[:show_missing_child_schedule_warning]
+      assert_equal [{ id: 200, subject: 'Issue 200', reason: '완료기한 미기입' }], parent_info[:missing_child_schedule_warning_details]
       assert_equal false, parent_info[:show_no_due_date_warning]
       assert_equal false, descendant_info[:show_missing_child_schedule_warning]
+      assert_equal [], descendant_info[:missing_child_schedule_warning_details]
       assert_equal false, descendant_info[:show_no_due_date_warning]
     end
   end
@@ -166,9 +214,10 @@ class RedmineTxMilestoneHelperTest < ActiveSupport::TestCase
 
   private
 
-  def gantt_issue_stub(id:, tracker_id:, status_id:, parent_id: nil, start_date: Date.today, due_date: Date.today, ancestor_id: nil)
+  def gantt_issue_stub(id:, tracker_id:, status_id:, subject: nil, parent_id: nil, start_date: Date.today, due_date: Date.today, ancestor_id: nil)
     OpenStruct.new(
       id: id,
+      subject: subject || "Issue #{id}",
       tracker_id: tracker_id,
       status_id: status_id,
       parent_id: parent_id,
@@ -182,7 +231,11 @@ class RedmineTxMilestoneHelperTest < ActiveSupport::TestCase
     Tracker.stub(:is_exception?, ->(tracker_id) { tracker_id == :exception }) do
       Tracker.stub(:is_sidejob?, ->(tracker_id) { tracker_id == :sidejob }) do
         Tracker.stub(:is_planning?, ->(tracker_id) { tracker_id == :planning }) do
-          IssueStatus.stub(:is_implemented?, ->(status_id) { status_id == :implemented }, &block)
+          IssueStatus.stub(:is_implemented?, ->(status_id) { status_id == :implemented }) do
+            IssueStatus.stub(:is_discarded?, ->(status_id) { status_id == :discarded }) do
+              IssueStatus.stub(:is_postponed?, ->(status_id) { status_id == :postponed }, &block)
+            end
+          end
         end
       end
     end

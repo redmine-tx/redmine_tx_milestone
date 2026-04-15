@@ -93,6 +93,7 @@
             depth = _issue[:depth]
             show_no_due_date_warning = _issue[:show_no_due_date_warning]
             show_missing_child_schedule_warning = _issue[:show_missing_child_schedule_warning]
+            missing_child_schedule_warning_details = _issue[:missing_child_schedule_warning_details] || []
             %>
 
             <div id="issue-<%= issue.id %>" class="task-row mouseover-<%=gantt_container_id%> hascontextmenu">
@@ -114,7 +115,8 @@
                 <% end %>
 
                 <% if show_missing_child_schedule_warning then %>
-                    <i class='fas fa-circle-question warning-icon icon-missing-child-schedule' title='자식 일감 중 완료기한 미기입 있음'> </i>
+                    <% warning_lines = ['자식 일감 중 완료기한 미기입 있음'] + missing_child_schedule_warning_details.map { |detail| "##{detail[:id]} : #{detail[:subject]} (#{detail[:reason]})" } %>
+                    <i class='fas fa-circle-question warning-icon icon-missing-child-schedule' title="<%= warning_lines.join("\n") %>"> </i>
                 <% end %>
 
                 <% if IssueStatus.is_discarded?(issue.status_id) then %>
