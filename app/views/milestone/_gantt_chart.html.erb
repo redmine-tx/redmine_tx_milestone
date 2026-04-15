@@ -364,7 +364,7 @@
                     planning_left = (planning_start_date - line_start_date).to_i * cell_width
                     planning_width = (planning_end_date - planning_start_date + 1).to_i * cell_width
                   %>
-                  <div class="arrow-line-planning-segment" style="left: <%= planning_left %>px; width: <%= planning_width %>px; top: <%= cell_height -3 %>px;" data-issue-tooltip="<%= issue.id %>"></div>
+                  <div class="arrow-line-planning-segment" style="left: <%= planning_left %>px; width: <%= planning_width %>px; top: <%= cell_height -4 %>px;" data-issue-tooltip="<%= issue.id %>"></div>
                 <% end %>
                 <% if overrun_extension_width > 0 %>
                   <div class="arrow-line-overrun" style="left: <%= line_width %>px; width: <%= overrun_extension_width %>px; top: <%= cell_height -3 %>px;" data-issue-tooltip="<%= issue.id %>"></div>
