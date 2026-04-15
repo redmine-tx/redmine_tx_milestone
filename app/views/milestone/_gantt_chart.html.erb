@@ -52,6 +52,7 @@
   paused_periods_map = gantt_paused_periods(issues)
   depth_map_hash = gantt_depth_map(issues)
   overrun_due_dates = gantt_top_level_overrun_due_dates(issues)
+  planning_segments_map = gantt_parent_planning_segments_map(issues)
 
   _due_date = defined?(due_date) && due_date ? due_date : nil
   date_info = gantt_date_range(issues, gantt_opts, _due_date, overrun_due_dates.values)
@@ -346,8 +347,21 @@
                   line_classes << 'show-after' if show_line_after
                   line_state_classes = gantt_schedule_line_css_classes(issue, virtual_ids)
                   line_classes << line_state_classes if line_state_classes.present?
+                  planning_segments = planning_segments_map[issue.id] || []
+                  visible_line_end_date = [line_end_date, end_date].min
                 %>
                 <div class="<%= line_classes.join(' ') %>" style="width: <%=line_width %>px; top: <%= cell_height -3 %>px;" data-issue-tooltip="<%= issue.id %>"></div>
+                <% planning_segments.each do |segment| %>
+                  <%
+                    planning_start_date = [segment[:start_date], line_start_date].max
+                    planning_end_date = [segment[:due_date], visible_line_end_date].min
+                    next if planning_start_date > planning_end_date
+
+                    planning_left = (planning_start_date - line_start_date).to_i * cell_width
+                    planning_width = (planning_end_date - planning_start_date + 1).to_i * cell_width
+                  %>
+                  <div class="arrow-line-planning-segment" style="left: <%= planning_left %>px; width: <%= planning_width %>px; top: <%= cell_height -3 %>px;" data-issue-tooltip="<%= issue.id %>"></div>
+                <% end %>
                 <% if overrun_extension_width > 0 %>
                   <div class="arrow-line-overrun" style="left: <%= line_width %>px; width: <%= overrun_extension_width %>px; top: <%= cell_height -3 %>px;" data-issue-tooltip="<%= issue.id %>"></div>
                 <% end %>

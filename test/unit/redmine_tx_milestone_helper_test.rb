@@ -108,27 +108,59 @@ class RedmineTxMilestoneHelperTest < ActiveSupport::TestCase
     end
   end
 
-  def test_gantt_schedule_line_css_classes_marks_child_planning_issue
-    planning_child = gantt_issue_stub(id: 300, tracker_id: :planning, status_id: :open, parent_id: 100)
+  def test_gantt_parent_planning_segments_map_collects_direct_child_planning_ranges
+    parent = gantt_issue_stub(id: 100, tracker_id: :work, status_id: :open)
+    planning_child = gantt_issue_stub(id: 300, tracker_id: :planning, status_id: :open, parent_id: 100, start_date: Date.new(2026, 4, 9), due_date: Date.new(2026, 4, 10))
+    non_planning_child = gantt_issue_stub(id: 301, tracker_id: :work, status_id: :open, parent_id: 100, start_date: Date.new(2026, 4, 11), due_date: Date.new(2026, 4, 12))
 
     with_gantt_schedule_stubs do
-      assert_equal 'planning', gantt_schedule_line_css_classes(planning_child)
+      assert_equal(
+        { 100 => [{ start_date: Date.new(2026, 4, 9), due_date: Date.new(2026, 4, 10) }] },
+        gantt_parent_planning_segments_map([parent, planning_child, non_planning_child])
+      )
     end
   end
 
-  def test_gantt_schedule_line_css_classes_marks_due_only_child_planning_issue
-    planning_child = gantt_issue_stub(id: 301, tracker_id: :planning, status_id: :open, parent_id: 100, start_date: nil, due_date: Date.today)
+  def test_gantt_parent_planning_segments_map_treats_due_only_planning_child_as_single_day_segment
+    parent = gantt_issue_stub(id: 100, tracker_id: :work, status_id: :open)
+    planning_child = gantt_issue_stub(id: 302, tracker_id: :planning, status_id: :open, parent_id: 100, start_date: nil, due_date: Date.new(2026, 4, 9))
 
     with_gantt_schedule_stubs do
-      assert_equal 'planning planning-due-only', gantt_schedule_line_css_classes(planning_child)
+      assert_equal(
+        { 100 => [{ start_date: Date.new(2026, 4, 9), due_date: Date.new(2026, 4, 9) }] },
+        gantt_parent_planning_segments_map([parent, planning_child])
+      )
     end
   end
 
-  def test_gantt_schedule_line_css_classes_keeps_planning_priority_over_virtual
-    planning_child = gantt_issue_stub(id: 302, tracker_id: :planning, status_id: :open, parent_id: 100)
+  def test_gantt_parent_planning_segments_map_merges_overlapping_and_adjacent_ranges
+    parent = gantt_issue_stub(id: 100, tracker_id: :work, status_id: :open)
+    first_planning_child = gantt_issue_stub(id: 303, tracker_id: :planning, status_id: :open, parent_id: 100, start_date: Date.new(2026, 4, 9), due_date: Date.new(2026, 4, 10))
+    second_planning_child = gantt_issue_stub(id: 304, tracker_id: :planning, status_id: :open, parent_id: 100, start_date: Date.new(2026, 4, 11), due_date: Date.new(2026, 4, 12))
+    separate_planning_child = gantt_issue_stub(id: 305, tracker_id: :planning, status_id: :open, parent_id: 100, start_date: Date.new(2026, 4, 14), due_date: Date.new(2026, 4, 14))
 
     with_gantt_schedule_stubs do
-      assert_equal 'planning', gantt_schedule_line_css_classes(planning_child, [302])
+      assert_equal(
+        {
+          100 => [
+            { start_date: Date.new(2026, 4, 9), due_date: Date.new(2026, 4, 12) },
+            { start_date: Date.new(2026, 4, 14), due_date: Date.new(2026, 4, 14) }
+          ]
+        },
+        gantt_parent_planning_segments_map([parent, first_planning_child, second_planning_child, separate_planning_child])
+      )
+    end
+  end
+
+  def test_gantt_parent_planning_segments_map_uses_provided_child_issues_when_display_list_has_only_parents
+    parent = gantt_issue_stub(id: 100, tracker_id: :work, status_id: :open)
+    planning_child = gantt_issue_stub(id: 306, tracker_id: :planning, status_id: :open, parent_id: 200, ancestor_id: 100, start_date: Date.new(2026, 4, 9), due_date: Date.new(2026, 4, 9))
+
+    with_gantt_schedule_stubs do
+      assert_equal(
+        { 100 => [{ start_date: Date.new(2026, 4, 9), due_date: Date.new(2026, 4, 9) }] },
+        gantt_parent_planning_segments_map([parent], [planning_child])
+      )
     end
   end
 

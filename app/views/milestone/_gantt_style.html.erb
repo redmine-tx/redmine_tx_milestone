@@ -243,19 +243,13 @@
     background-color: #fa0;
   }
 
-  .gantt-wrapper .arrow-line.planning {
-    background-color: #2f6fed;
-  }
-
-  .gantt-wrapper .arrow-line.planning-due-only {
-    background-color: transparent;
-    border-bottom: 2px dotted #2f6fed;
-    box-sizing: border-box;
-  }
-
-  .gantt-wrapper .arrow-line.planning-due-only.show-after::after,
-  .gantt-wrapper .arrow-line.planning-due-only.show-before::before {
-    background-color: #2f6fed;
+  .gantt-wrapper .arrow-line-planning-segment {
+    position: absolute;
+    height: 2px;
+    background-color: #33b5ff;
+    outline: 1px solid rgba(255, 255, 255, 0.65);
+    z-index: 16;
+    pointer-events: none;
   }
 
   .gantt-wrapper .arrow-line-overrun {

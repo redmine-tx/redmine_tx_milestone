@@ -368,23 +368,95 @@ module RedmineTxMilestoneHelper
     issue.due_date.nil?
   end
 
-  def gantt_planning_line?(issue)
-    issue.parent_id.present? &&
-      Tracker.respond_to?(:is_planning?) &&
-      Tracker.is_planning?(issue.tracker_id)
+  def gantt_schedule_line_css_classes(issue, virtual_ids = [])
+    Array(virtual_ids).include?(issue.id) ? 'virtual' : ''
   end
 
-  def gantt_schedule_line_css_classes(issue, virtual_ids = [])
-    classes = []
+  def gantt_parent_planning_segments_map(issues, descendant_issues = nil)
+    displayed_issue_ids = Array(issues).map(&:id).compact
+    return {} if displayed_issue_ids.empty?
 
-    if gantt_planning_line?(issue)
-      classes << 'planning'
-      classes << 'planning-due-only' if issue.start_date.blank? && issue.due_date.present?
-    elsif Array(virtual_ids).include?(issue.id)
-      classes << 'virtual'
+    descendant_issues ||= gantt_visible_descendants_for(issues)
+
+    displayed_issue_ids.each_with_object({}) do |issue_id, segments_map|
+      next if displayed_issue_ids.include?(issues.find { |issue| issue.id == issue_id }&.parent_id)
+
+      issue_descendants = Array(descendant_issues).select do |descendant|
+        descendant_ancestor_id = descendant.respond_to?(:ancestor_id) ? descendant.ancestor_id : descendant.parent_id
+        descendant_ancestor_id == issue_id
+      end
+
+      segments = issue_descendants.filter_map do |descendant|
+        next unless Tracker.respond_to?(:is_planning?) && Tracker.is_planning?(descendant.tracker_id)
+
+        segment_start = descendant.start_date || descendant.due_date
+        segment_end = descendant.due_date || descendant.start_date
+        next unless segment_start.present? && segment_end.present?
+
+        if segment_end < segment_start
+          segment_start, segment_end = segment_end, segment_start
+        end
+
+        {
+          start_date: segment_start,
+          due_date: segment_end
+        }
+      end
+
+      merged_segments = gantt_merge_date_segments(segments)
+      segments_map[issue_id] = merged_segments if merged_segments.any?
+    end
+  end
+
+  def gantt_visible_descendants_for(issues)
+    displayed_issue_ids = Array(issues).map(&:id).compact
+    return [] if displayed_issue_ids.empty?
+
+    in_list_descendants = Array(issues).select do |issue|
+      issue.parent_id.present? && displayed_issue_ids.include?(issue.parent_id)
+    end
+    if in_list_descendants.any?
+      return in_list_descendants.map do |issue|
+        issue.dup.tap do |descendant|
+          descendant.ancestor_id = issue.parent_id if descendant.respond_to?(:ancestor_id=)
+        end
+      end
     end
 
-    classes.join(' ')
+    return [] unless issues.all? { |issue| issue.is_a?(Issue) }
+
+    Issue.visible
+         .joins(
+           "JOIN #{Issue.table_name} ancestors" \
+           " ON ancestors.root_id = #{Issue.table_name}.root_id" \
+           " AND ancestors.lft <= #{Issue.table_name}.lft" \
+           " AND ancestors.rgt >= #{Issue.table_name}.rgt"
+         )
+         .where(ancestors: { id: displayed_issue_ids })
+         .where.not("#{Issue.table_name}.id = ancestors.id")
+         .select(
+           "#{Issue.table_name}.id",
+           "#{Issue.table_name}.parent_id",
+           "#{Issue.table_name}.tracker_id",
+           "#{Issue.table_name}.start_date",
+           "#{Issue.table_name}.due_date",
+           "ancestors.id AS ancestor_id"
+         )
+         .to_a
+  end
+
+  def gantt_merge_date_segments(segments)
+    return [] if segments.blank?
+
+    sorted_segments = segments.sort_by { |segment| [segment[:start_date], segment[:due_date]] }
+
+    sorted_segments.each_with_object([]) do |segment, merged_segments|
+      if merged_segments.empty? || segment[:start_date] > merged_segments.last[:due_date] + 1.day
+        merged_segments << segment.dup
+      else
+        merged_segments.last[:due_date] = [merged_segments.last[:due_date], segment[:due_date]].max
+      end
+    end
   end
 
   def gantt_child_schedule_warning_map(issues, descendant_issues = nil)
@@ -438,7 +510,9 @@ module RedmineTxMilestoneHelper
                   :gantt_issue_css_class, :gantt_paused_periods, :gantt_depth_map,
                   :gantt_top_level_overrun_due_dates, :gantt_date_range,
                   :gantt_schedule_required?, :gantt_missing_due_date?,
-                  :gantt_planning_line?, :gantt_schedule_line_css_classes,
+                  :gantt_schedule_line_css_classes, :gantt_parent_planning_segments_map,
+                  :gantt_visible_descendants_for,
+                  :gantt_merge_date_segments,
                   :gantt_child_schedule_warning_map, :gantt_prepare_issues
 
   class RedmineTxMilestoneHook < Redmine::Hook::ViewListener
