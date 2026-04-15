@@ -148,7 +148,12 @@
     </div>
   </div>
   
-  <div id="<%= gantt_container_id %>" class="gantt-container" style='border: 1px solid #ccc;'>
+  <div id="<%= gantt_container_id %>"
+       class="gantt-container"
+       data-gantt-sync="true"
+       data-gantt-start-jd="<%= start_date.jd %>"
+       data-gantt-cell-width="<%= cell_width %>"
+       style='border: 1px solid #ccc;'>
     <div class="gantt-grid" style="grid-template-columns: repeat(<%=total_days+1%>, <%=cell_width%>px);">
       <!-- 월 헤더 -->
       <% 
@@ -387,79 +392,142 @@
 <%= context_menu %>
 
 <script>
-  $(document).ready(function() {
-    var wrapperId = '<%= gantt_container_id %>';
-    var cellWidth = <%= cell_width %>;
-    var cellHeight = <%= cell_height %>;
+  (function() {
+    function ensureGanttSyncManager() {
+      if (window.TxMilestoneGanttSyncManager) {
+        return window.TxMilestoneGanttSyncManager;
+      }
 
-    // 오늘 날짜로 간트 스크롤
-    var ganttEl = document.getElementById(wrapperId);
-    var startDate = new Date("<%= start_date.strftime( '%Y-%m-%d' ) %>");
-    var daysFromStart = (new Date() - startDate) / (1000 * 60 * 60 * 24);
-    ganttEl.scrollLeft = (daysFromStart - 25) * cellWidth;
+      window.TxMilestoneGanttSyncManager = {
+        isSyncing: false,
 
-    // 캐싱
-    var $wrapper = $('.mouseover-wrapper-' + wrapperId);
-    var cursorEl = $wrapper.find('[class*="cursor-container-"]')[0];
-    var $taskNameElements = $wrapper.find('.gantt-info-container .task-name');
-    var headerHeight = $taskNameElements.first().outerHeight() || <%= cell_height * 2 %>;
-    var wrapperOffsetTop = null;
+        register: function(sourceEl) {
+          if (!sourceEl || sourceEl.getAttribute('data-gantt-sync-bound') === 'true') {
+            return;
+          }
 
-    // 행 하이라이트 - 이벤트 위임
-    $wrapper.on('mouseenter', '.mouseover-' + wrapperId, function() {
-      var rows = $wrapper.find('.mouseover-' + wrapperId);
-      var rowIndex = rows.index(this);
+          sourceEl.setAttribute('data-gantt-sync-bound', 'true');
 
-      // 좌측 정보 영역과 우측 간트 차트 영역의 행을 구분
-      if (rowIndex >= rows.length / 2) rowIndex = rowIndex - rows.length / 2;
+          var manager = this;
+          sourceEl.addEventListener('scroll', function() {
+            manager.syncFrom(sourceEl);
+          });
+        },
 
-      // 현재 간트차트 내의 요소들만 선택
-      if ($taskNameElements.length > rowIndex + 1) { // +1은 헤더 제외
-        var targetElement = $taskNameElements[rowIndex + 1];
-        if (wrapperOffsetTop === null) wrapperOffsetTop = $wrapper.offset().top;
-        var rowTop = $(targetElement).offset().top - wrapperOffsetTop;
+        syncFrom: function(sourceEl) {
+          if (this.isSyncing) {
+            return;
+          }
+
+          var sourceCellWidth = parseFloat(sourceEl.getAttribute('data-gantt-cell-width'));
+          var sourceStartJd = parseFloat(sourceEl.getAttribute('data-gantt-start-jd'));
+          if (!sourceCellWidth || isNaN(sourceStartJd)) {
+            return;
+          }
+
+          var visibleStartJd = sourceStartJd + (sourceEl.scrollLeft / sourceCellWidth);
+
+          this.isSyncing = true;
+          try {
+            $('.gantt-container[data-gantt-sync="true"]').each(function(_, targetEl) {
+              if (targetEl === sourceEl) {
+                return;
+              }
+
+              var targetCellWidth = parseFloat(targetEl.getAttribute('data-gantt-cell-width'));
+              var targetStartJd = parseFloat(targetEl.getAttribute('data-gantt-start-jd'));
+              if (!targetCellWidth || isNaN(targetStartJd)) {
+                return;
+              }
+
+              var targetScrollLeft = (visibleStartJd - targetStartJd) * targetCellWidth;
+              var maxScrollLeft = Math.max(targetEl.scrollWidth - targetEl.clientWidth, 0);
+              targetEl.scrollLeft = Math.max(0, Math.min(targetScrollLeft, maxScrollLeft));
+            });
+          } finally {
+            this.isSyncing = false;
+          }
+        }
+      };
+
+      return window.TxMilestoneGanttSyncManager;
+    }
+
+    $(document).ready(function() {
+      var wrapperId = '<%= gantt_container_id %>';
+      var cellWidth = <%= cell_width %>;
+      var cellHeight = <%= cell_height %>;
+      var ganttEl = document.getElementById(wrapperId);
+
+      if (ganttEl) {
+        var initialScrollLeft = (<%= today_index %> - 25) * cellWidth;
+        var maxInitialScrollLeft = Math.max(ganttEl.scrollWidth - ganttEl.clientWidth, 0);
+        ganttEl.scrollLeft = Math.max(0, Math.min(initialScrollLeft, maxInitialScrollLeft));
+        ensureGanttSyncManager().register(ganttEl);
+      }
+
+      // 캐싱
+      var $wrapper = $('.mouseover-wrapper-' + wrapperId);
+      var cursorEl = $wrapper.find('[class*="cursor-container-"]')[0];
+      var $taskNameElements = $wrapper.find('.gantt-info-container .task-name');
+      var headerHeight = $taskNameElements.first().outerHeight() || <%= cell_height * 2 %>;
+      var wrapperOffsetTop = null;
+
+      // 행 하이라이트 - 이벤트 위임
+      $wrapper.on('mouseenter', '.mouseover-' + wrapperId, function() {
+        var rows = $wrapper.find('.mouseover-' + wrapperId);
+        var rowIndex = rows.index(this);
+
+        // 좌측 정보 영역과 우측 간트 차트 영역의 행을 구분
+        if (rowIndex >= rows.length / 2) rowIndex = rowIndex - rows.length / 2;
+
+        // 현재 간트차트 내의 요소들만 선택
+        if ($taskNameElements.length > rowIndex + 1) { // +1은 헤더 제외
+          var targetElement = $taskNameElements[rowIndex + 1];
+          if (wrapperOffsetTop === null) wrapperOffsetTop = $wrapper.offset().top;
+          var rowTop = $(targetElement).offset().top - wrapperOffsetTop;
+          cursorEl.style.top = rowTop + 'px';
+          cursorEl.style.height = cellHeight + 'px';
+          cursorEl.style.display = 'block';
+          return;
+        }
+
+        // fallback
+        var rowTop = headerHeight + (rowIndex * cellHeight);
         cursorEl.style.top = rowTop + 'px';
         cursorEl.style.height = cellHeight + 'px';
         cursorEl.style.display = 'block';
-        return;
-      }
+      });
 
-      // fallback
-      var rowTop = headerHeight + (rowIndex * cellHeight);
-      cursorEl.style.top = rowTop + 'px';
-      cursorEl.style.height = cellHeight + 'px';
-      cursorEl.style.display = 'block';
+      $wrapper.on('mouseleave', function() {
+        cursorEl.style.display = 'none';
+        wrapperOffsetTop = null; // lazy 캐싱 리셋
+      });
+
+      // 툴팁 기능
+      //setupTooltip();
+
+      // 간트 차트 우측 영역 컨텍스트 메뉴 지원
+      $wrapper.on('contextmenu', '[data-issue-tooltip]', function(event) {
+        var target = $(event.target);
+        if (target.is('a:not(.js-contextmenu)')) return;
+
+        var issueId = $(this).data('issue-tooltip');
+        if (!issueId) return;
+
+        var tr = $wrapper.find('#issue-' + issueId + '.hascontextmenu');
+        if (tr.length < 1) return;
+
+        event.preventDefault();
+        event.stopPropagation();
+
+        if (!contextMenuIsSelected(tr)) {
+          contextMenuUnselectAll();
+          contextMenuAddSelection(tr);
+          contextMenuSetLastSelected(tr);
+        }
+        contextMenuShow(event);
+      });
     });
-
-    $wrapper.on('mouseleave', function() {
-      cursorEl.style.display = 'none';
-      wrapperOffsetTop = null; // lazy 캐싱 리셋
-    });
-
-  // 툴팁 기능
-  //setupTooltip();
-
-    // 간트 차트 우측 영역 컨텍스트 메뉴 지원
-    $wrapper.on('contextmenu', '[data-issue-tooltip]', function(event) {
-      var target = $(event.target);
-      if (target.is('a:not(.js-contextmenu)')) return;
-
-      var issueId = $(this).data('issue-tooltip');
-      if (!issueId) return;
-
-      var tr = $wrapper.find('#issue-' + issueId + '.hascontextmenu');
-      if (tr.length < 1) return;
-
-      event.preventDefault();
-      event.stopPropagation();
-
-      if (!contextMenuIsSelected(tr)) {
-        contextMenuUnselectAll();
-        contextMenuAddSelection(tr);
-        contextMenuSetLastSelected(tr);
-      }
-      contextMenuShow(event);
-    });
-
-});
+  })();
 </script>
