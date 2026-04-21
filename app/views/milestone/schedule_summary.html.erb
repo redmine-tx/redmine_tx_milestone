@@ -151,22 +151,58 @@
       color: #666;
       font-size: 0.9em;
     }
-    .tx-full-day-vacation-layer {
-      position: absolute;
-      inset: 0;
-      pointer-events: none;
-      z-index: 6;
+    .tx-schedule-cell.tx-full-day-vacation-cell:not(.tx-schedule-bar) {
+      background-image:
+        linear-gradient(
+          to top right,
+          transparent calc(50% - 1px),
+          rgba(80, 80, 80, 0.35) calc(50% - 1px),
+          rgba(80, 80, 80, 0.35) calc(50% + 1px),
+          transparent calc(50% + 1px)
+        ),
+        linear-gradient(
+          to bottom right,
+          transparent calc(50% - 1px),
+          rgba(80, 80, 80, 0.35) calc(50% - 1px),
+          rgba(80, 80, 80, 0.35) calc(50% + 1px),
+          transparent calc(50% + 1px)
+        );
+      background-repeat: no-repeat;
+      background-size: 100% 100%;
+      background-position: center;
     }
-    .tx-full-day-vacation-marker {
+    .tx-schedule-bar.tx-full-day-vacation-cell {
+      position: relative;
+      background-image: none;
+    }
+    .tx-schedule-bar.tx-full-day-vacation-cell .tx-schedule-bar-content {
+      position: relative;
+      z-index: 1;
+    }
+    .tx-full-day-vacation-segment {
       position: absolute;
-      display: flex;
-      align-items: center;
-      justify-content: center;
-      color: #c62828;
-      font-weight: bold;
-      font-size: 14px;
-      line-height: 1;
-      text-shadow: 0 0 2px #fff, 0 0 4px #fff;
+      top: 0;
+      bottom: 0;
+      pointer-events: none;
+      z-index: 0;
+      background-image:
+        linear-gradient(
+          to top right,
+          transparent calc(50% - 1px),
+          rgba(80, 80, 80, 0.35) calc(50% - 1px),
+          rgba(80, 80, 80, 0.35) calc(50% + 1px),
+          transparent calc(50% + 1px)
+        ),
+        linear-gradient(
+          to bottom right,
+          transparent calc(50% - 1px),
+          rgba(80, 80, 80, 0.35) calc(50% - 1px),
+          rgba(80, 80, 80, 0.35) calc(50% + 1px),
+          transparent calc(50% + 1px)
+        );
+      background-repeat: no-repeat;
+      background-size: 100% 100%;
+      background-position: center;
     }
   </style>
 <% end %>
@@ -710,23 +746,29 @@ $(document).ready(function() {
     return year + '-' + month + '-' + day;
   }
 
-  function renderFullDayVacationMarkers(containerSelector, jsonData, vacationMap) {
+  function decorateFullDayVacationCells(containerSelector, jsonData, vacationMap) {
     if (!vacationMap || Object.keys(vacationMap).length === 0) return;
 
     var container = document.querySelector(containerSelector);
     if (!container) return;
 
-    var content = container.querySelector('.tx-timeline-content');
     var table = container.querySelector('.tx-timeline-table');
-    if (!content || !table) return;
+    if (!table) return;
 
-    var existingLayer = content.querySelector('.tx-full-day-vacation-layer');
-    if (existingLayer && existingLayer.parentNode) {
-      existingLayer.parentNode.removeChild(existingLayer);
-    }
-
-    var overlayLayer = document.createElement('div');
-    overlayLayer.className = 'tx-full-day-vacation-layer';
+    Array.prototype.forEach.call(
+      table.querySelectorAll('td.tx-full-day-vacation-cell'),
+      function(cell) {
+        cell.classList.remove('tx-full-day-vacation-cell');
+        Array.prototype.forEach.call(
+          cell.querySelectorAll('.tx-full-day-vacation-segment'),
+          function(segment) {
+            if (segment.parentNode) {
+              segment.parentNode.removeChild(segment);
+            }
+          }
+        );
+      }
+    );
 
     var dayCells = Array.prototype.slice.call(
       table.querySelectorAll('thead .tx-day-row .tx-day-cell[data-day-index]')
@@ -735,6 +777,7 @@ $(document).ready(function() {
       table.querySelectorAll('tbody tr.tx-data-row')
     );
     if (!dayCells.length || !rowEls.length) return;
+    var dayCellWidth = dayCells[0].getBoundingClientRect().width;
 
     var startDate = new Date(jsonData.options.startDate + 'T00:00:00');
     var dayOfWeek = startDate.getDay();
@@ -743,7 +786,6 @@ $(document).ready(function() {
       startDate.setDate(startDate.getDate() - daysToSubtract);
     }
 
-    var contentRect = content.getBoundingClientRect();
     var dayMeta = {};
     dayCells.forEach(function(dayCell) {
       var dayIndex = parseInt(dayCell.getAttribute('data-day-index'), 10);
@@ -753,8 +795,7 @@ $(document).ready(function() {
       markerDate.setDate(startDate.getDate() + dayIndex);
 
       dayMeta[dayIndex] = {
-        date: formatDateYmd(markerDate),
-        rect: dayCell.getBoundingClientRect()
+        date: formatDateYmd(markerDate)
       };
     });
 
@@ -765,27 +806,48 @@ $(document).ready(function() {
         rowIndex += 1;
         if (!rowEl || !event.login) return;
 
-        var rowRect = rowEl.getBoundingClientRect();
+        var cellEntries = [];
+        var dayCursor = 0;
+        Array.prototype.forEach.call(
+          rowEl.querySelectorAll('td.tx-schedule-cell'),
+          function(cell) {
+            var colspan = parseInt(cell.getAttribute('colspan') || '1', 10);
+            var safeColspan = isNaN(colspan) || colspan < 1 ? 1 : colspan;
+
+            cellEntries.push({
+              cell: cell,
+              startIndex: dayCursor,
+              colspan: safeColspan
+            });
+
+            dayCursor += safeColspan;
+          }
+        );
 
         Object.keys(dayMeta).forEach(function(dayIndexKey) {
+          var dayIndex = parseInt(dayIndexKey, 10);
           var meta = dayMeta[dayIndexKey];
           if (!meta || !vacationMap[meta.date] || !vacationMap[meta.date][event.login]) return;
 
-          var marker = document.createElement('div');
-          marker.className = 'tx-full-day-vacation-marker';
-          marker.textContent = 'X';
-          marker.title = '전일 휴가';
-          marker.setAttribute('aria-hidden', 'true');
-          marker.style.left = (meta.rect.left - contentRect.left) + 'px';
-          marker.style.top = (rowRect.top - contentRect.top) + 'px';
-          marker.style.width = meta.rect.width + 'px';
-          marker.style.height = rowRect.height + 'px';
-          overlayLayer.appendChild(marker);
+          var cellEntry = cellEntries.find(function(entry) {
+            return dayIndex >= entry.startIndex && dayIndex < entry.startIndex + entry.colspan;
+          });
+          if (!cellEntry) return;
+
+          var cell = cellEntry.cell;
+          cell.classList.add('tx-full-day-vacation-cell');
+
+          if (!cell.classList.contains('tx-schedule-bar')) return;
+
+          var segment = document.createElement('span');
+          segment.className = 'tx-full-day-vacation-segment';
+          segment.setAttribute('aria-hidden', 'true');
+          segment.style.left = ((dayIndex - cellEntry.startIndex) * dayCellWidth) + 'px';
+          segment.style.width = dayCellWidth + 'px';
+          cell.appendChild(segment);
         });
       });
     });
-
-    content.appendChild(overlayLayer);
   }
   
   // JSON 데이터 구성 (타임라인 그리드 + 엑셀 공용)
@@ -897,7 +959,7 @@ $(document).ready(function() {
   // 타임라인 그리드 렌더링
   try {
     TxTimelineGrid.render('#timeline-grid-container', jsonData, { verticalMarkers: <%= version_markers.to_json.html_safe %>, scrollToToday: true, scrollAlign: 'center', scrollBehavior: 'auto' });
-    renderFullDayVacationMarkers('#timeline-grid-container', jsonData, fullDayVacationMap);
+    decorateFullDayVacationCells('#timeline-grid-container', jsonData, fullDayVacationMap);
     console.log('타임라인 그리드 렌더링 완료');
     
     // 렌더링 후 페이지 상단(폼 위치)으로 즉시 스크롤
@@ -913,7 +975,7 @@ $(document).ready(function() {
   });
 
   $(window).off('resize.scheduleSummaryVacation').on('resize.scheduleSummaryVacation', function() {
-    renderFullDayVacationMarkers('#timeline-grid-container', jsonData, fullDayVacationMap);
+    decorateFullDayVacationCells('#timeline-grid-container', jsonData, fullDayVacationMap);
   });
   
   // XLSX 다운로드 버튼
