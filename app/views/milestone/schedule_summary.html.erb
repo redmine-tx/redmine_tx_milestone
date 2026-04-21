@@ -146,6 +146,28 @@
       border-radius: 4px; padding: 10px 16px; margin: 0 0 16px; color: #721c24; font-size: 0.95em; line-height: 1.6;
     }
     .schedule-excluded-warning a { color: #721c24; text-decoration: underline; }
+    .schedule-vacation-note {
+      margin: 8px 0 0;
+      color: #666;
+      font-size: 0.9em;
+    }
+    .tx-full-day-vacation-layer {
+      position: absolute;
+      inset: 0;
+      pointer-events: none;
+      z-index: 6;
+    }
+    .tx-full-day-vacation-marker {
+      position: absolute;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      color: #c62828;
+      font-weight: bold;
+      font-size: 14px;
+      line-height: 1;
+      text-shadow: 0 0 2px #fff, 0 0 4px #fff;
+    }
   </style>
 <% end %>
 
@@ -304,6 +326,28 @@ all_groups = Group.all.reject { |group| excluded_group_ids.include?(group.id) }
     
     result_data[group] = group_users_issues if group_users_issues.any?
   end
+
+  displayed_user_logins = result_data.values.flat_map { |users_issues| users_issues.keys.map(&:login) }.to_set
+  full_day_vacation_map = {}
+  if displayed_user_logins.any? && defined?(TxBaseHelper::UserVacationApi) && TxBaseHelper::UserVacationApi.available?
+    full_day_statuses = %w[휴가 휴직 병가]
+    vacation_info = TxBaseHelper::UserVacationApi.get_vacation_info(timeline_start_date..timeline_end_date)
+
+    vacation_info.each do |date, day_info|
+      next unless day_info.present?
+
+      day_map = day_info.each_with_object({}) do |(login, info), acc|
+        next unless displayed_user_logins.include?(login)
+
+        status = info[:status].to_s
+        next unless full_day_statuses.include?(status)
+
+        acc[login] = status
+      end
+
+      full_day_vacation_map[date.strftime('%Y-%m-%d')] = day_map if day_map.any?
+    end
+  end
   
   # 각 사용자별 다른 미완료 일감 조회 (배경 표시용)
   # 현재 표시된 일감 ID 집합
@@ -368,6 +412,9 @@ all_groups = Group.all.reject { |group| excluded_group_ids.include?(group.id) }
     <% if result_data.any? %>
       <!-- 타임라인 그리드 -->
       <div id="timeline-grid-container" style="margin: 20px 0;"></div>
+      <% if full_day_vacation_map.any? %>
+        <p class="schedule-vacation-note">그리드의 <strong>X</strong> 표시는 해당 날짜 전일 휴가입니다.</p>
+      <% end %>
     <% else %>
       <div class="no-result">
         선택한 조건에 맞는 일감이 없습니다.
@@ -655,6 +702,91 @@ $(document).ready(function() {
     
     return result;
   }
+
+  function formatDateYmd(date) {
+    var year = date.getFullYear();
+    var month = String(date.getMonth() + 1).padStart(2, '0');
+    var day = String(date.getDate()).padStart(2, '0');
+    return year + '-' + month + '-' + day;
+  }
+
+  function renderFullDayVacationMarkers(containerSelector, jsonData, vacationMap) {
+    if (!vacationMap || Object.keys(vacationMap).length === 0) return;
+
+    var container = document.querySelector(containerSelector);
+    if (!container) return;
+
+    var content = container.querySelector('.tx-timeline-content');
+    var table = container.querySelector('.tx-timeline-table');
+    if (!content || !table) return;
+
+    var existingLayer = content.querySelector('.tx-full-day-vacation-layer');
+    if (existingLayer && existingLayer.parentNode) {
+      existingLayer.parentNode.removeChild(existingLayer);
+    }
+
+    var overlayLayer = document.createElement('div');
+    overlayLayer.className = 'tx-full-day-vacation-layer';
+
+    var dayCells = Array.prototype.slice.call(
+      table.querySelectorAll('thead .tx-day-row .tx-day-cell[data-day-index]')
+    );
+    var rowEls = Array.prototype.slice.call(
+      table.querySelectorAll('tbody tr.tx-data-row')
+    );
+    if (!dayCells.length || !rowEls.length) return;
+
+    var startDate = new Date(jsonData.options.startDate + 'T00:00:00');
+    var dayOfWeek = startDate.getDay();
+    var daysToSubtract = dayOfWeek === 0 ? 6 : dayOfWeek - 1;
+    if (daysToSubtract > 0) {
+      startDate.setDate(startDate.getDate() - daysToSubtract);
+    }
+
+    var contentRect = content.getBoundingClientRect();
+    var dayMeta = {};
+    dayCells.forEach(function(dayCell) {
+      var dayIndex = parseInt(dayCell.getAttribute('data-day-index'), 10);
+      if (isNaN(dayIndex)) return;
+
+      var markerDate = new Date(startDate);
+      markerDate.setDate(startDate.getDate() + dayIndex);
+
+      dayMeta[dayIndex] = {
+        date: formatDateYmd(markerDate),
+        rect: dayCell.getBoundingClientRect()
+      };
+    });
+
+    var rowIndex = 0;
+    jsonData.categories.forEach(function(category) {
+      (category.events || []).forEach(function(event) {
+        var rowEl = rowEls[rowIndex];
+        rowIndex += 1;
+        if (!rowEl || !event.login) return;
+
+        var rowRect = rowEl.getBoundingClientRect();
+
+        Object.keys(dayMeta).forEach(function(dayIndexKey) {
+          var meta = dayMeta[dayIndexKey];
+          if (!meta || !vacationMap[meta.date] || !vacationMap[meta.date][event.login]) return;
+
+          var marker = document.createElement('div');
+          marker.className = 'tx-full-day-vacation-marker';
+          marker.textContent = 'X';
+          marker.title = '전일 휴가';
+          marker.setAttribute('aria-hidden', 'true');
+          marker.style.left = (meta.rect.left - contentRect.left) + 'px';
+          marker.style.top = (rowRect.top - contentRect.top) + 'px';
+          marker.style.width = meta.rect.width + 'px';
+          marker.style.height = rowRect.height + 'px';
+          overlayLayer.appendChild(marker);
+        });
+      });
+    });
+
+    content.appendChild(overlayLayer);
+  }
   
   // JSON 데이터 구성 (타임라인 그리드 + 엑셀 공용)
   var jsonData = {
@@ -669,6 +801,7 @@ $(document).ready(function() {
     categories: [],
     legends: []
   };
+  var fullDayVacationMap = <%= full_day_vacation_map.to_json.html_safe %>;
   
   <% result_data.each do |group, users_issues| %>
     var category = {
@@ -680,6 +813,7 @@ $(document).ready(function() {
     <% users_issues.each do |user, issues| %>
       var event = {
         name: "<%= j(user.name) %>",
+        login: "<%= j(user.login) %>",
         link: "<%= url_for(controller: 'users', action: 'show', id: user.id, only_path: false) %>",
         schedules: []
       };
@@ -763,6 +897,7 @@ $(document).ready(function() {
   // 타임라인 그리드 렌더링
   try {
     TxTimelineGrid.render('#timeline-grid-container', jsonData, { verticalMarkers: <%= version_markers.to_json.html_safe %>, scrollToToday: true, scrollAlign: 'center', scrollBehavior: 'auto' });
+    renderFullDayVacationMarkers('#timeline-grid-container', jsonData, fullDayVacationMap);
     console.log('타임라인 그리드 렌더링 완료');
     
     // 렌더링 후 페이지 상단(폼 위치)으로 즉시 스크롤
@@ -775,6 +910,10 @@ $(document).ready(function() {
   // 스케줄 클릭 이벤트 (선택적)
   document.getElementById('timeline-grid-container').addEventListener('tx-schedule-click', function(e) {
     console.log('스케줄 클릭:', e.detail.scheduleName);
+  });
+
+  $(window).off('resize.scheduleSummaryVacation').on('resize.scheduleSummaryVacation', function() {
+    renderFullDayVacationMarkers('#timeline-grid-container', jsonData, fullDayVacationMap);
   });
   
   // XLSX 다운로드 버튼
