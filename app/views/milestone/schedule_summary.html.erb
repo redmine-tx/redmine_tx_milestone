@@ -151,21 +151,24 @@
       color: #666;
       font-size: 0.9em;
     }
+    .schedule-summary-result {
+      --vacation-x-line-half-width: 0.5px;
+    }
     .tx-schedule-cell.tx-full-day-vacation-cell:not(.tx-schedule-bar) {
       background-image:
         linear-gradient(
           to top right,
-          transparent calc(50% - 1px),
-          rgba(80, 80, 80, 0.35) calc(50% - 1px),
-          rgba(80, 80, 80, 0.35) calc(50% + 1px),
-          transparent calc(50% + 1px)
+          transparent calc(50% - var(--vacation-x-line-half-width)),
+          rgba(80, 80, 80, 0.35) calc(50% - var(--vacation-x-line-half-width)),
+          rgba(80, 80, 80, 0.35) calc(50% + var(--vacation-x-line-half-width)),
+          transparent calc(50% + var(--vacation-x-line-half-width))
         ),
         linear-gradient(
           to bottom right,
-          transparent calc(50% - 1px),
-          rgba(80, 80, 80, 0.35) calc(50% - 1px),
-          rgba(80, 80, 80, 0.35) calc(50% + 1px),
-          transparent calc(50% + 1px)
+          transparent calc(50% - var(--vacation-x-line-half-width)),
+          rgba(80, 80, 80, 0.35) calc(50% - var(--vacation-x-line-half-width)),
+          rgba(80, 80, 80, 0.35) calc(50% + var(--vacation-x-line-half-width)),
+          transparent calc(50% + var(--vacation-x-line-half-width))
         );
       background-repeat: no-repeat;
       background-size: 100% 100%;
@@ -188,17 +191,17 @@
       background-image:
         linear-gradient(
           to top right,
-          transparent calc(50% - 1px),
-          rgba(80, 80, 80, 0.35) calc(50% - 1px),
-          rgba(80, 80, 80, 0.35) calc(50% + 1px),
-          transparent calc(50% + 1px)
+          transparent calc(50% - var(--vacation-x-line-half-width)),
+          rgba(80, 80, 80, 0.35) calc(50% - var(--vacation-x-line-half-width)),
+          rgba(80, 80, 80, 0.35) calc(50% + var(--vacation-x-line-half-width)),
+          transparent calc(50% + var(--vacation-x-line-half-width))
         ),
         linear-gradient(
           to bottom right,
-          transparent calc(50% - 1px),
-          rgba(80, 80, 80, 0.35) calc(50% - 1px),
-          rgba(80, 80, 80, 0.35) calc(50% + 1px),
-          transparent calc(50% + 1px)
+          transparent calc(50% - var(--vacation-x-line-half-width)),
+          rgba(80, 80, 80, 0.35) calc(50% - var(--vacation-x-line-half-width)),
+          rgba(80, 80, 80, 0.35) calc(50% + var(--vacation-x-line-half-width)),
+          transparent calc(50% + var(--vacation-x-line-half-width))
         );
       background-repeat: no-repeat;
       background-size: 100% 100%;
