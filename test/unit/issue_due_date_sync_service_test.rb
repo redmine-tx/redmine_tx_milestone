@@ -21,6 +21,14 @@ class IssueDueDateSyncServiceTest < ActiveSupport::TestCase
            :custom_fields_projects,
            :custom_fields_trackers
 
+  def setup
+    @previous_user = User.current
+  end
+
+  def teardown
+    User.current = @previous_user
+  end
+
   def test_sync_due_date_updates_issue_and_creates_journal_detail_without_delivery
     issue = Issue.find(1)
     user = User.find(1)
@@ -28,6 +36,8 @@ class IssueDueDateSyncServiceTest < ActiveSupport::TestCase
     new_due_date = issue.due_date + 3.days
     previous_updated_on = issue.updated_on
     previous_journal_count = issue.journals.count
+    issue.update_columns(first_due_date: nil)
+    User.current = user
     ActionMailer::Base.deliveries.clear
 
     result = RedmineTxMilestone::IssueDueDateSyncService.sync_due_date!(
@@ -42,6 +52,7 @@ class IssueDueDateSyncServiceTest < ActiveSupport::TestCase
 
     assert_equal true, result
     assert_equal new_due_date, issue.due_date
+    assert_equal old_due_date, issue.first_due_date
     assert_operator issue.updated_on, :>, previous_updated_on
     assert_equal previous_journal_count + 1, issue.journals.count
     assert_equal user, journal.user

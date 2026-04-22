@@ -38,6 +38,7 @@ class IssueScheduleWriteServiceTest < ActiveSupport::TestCase
     new_due_date = old_due_date + 4.days
     previous_updated_on = issue.updated_on
     previous_journal_count = issue.journals.count
+    issue.update_columns(first_due_date: nil)
     User.current = user
     ActionMailer::Base.deliveries.clear
 
@@ -56,6 +57,7 @@ class IssueScheduleWriteServiceTest < ActiveSupport::TestCase
     assert_equal true, result
     assert_equal new_start_date, issue.start_date
     assert_equal new_due_date, issue.due_date
+    assert_equal old_due_date, issue.first_due_date
     assert_operator issue.updated_on, :>, previous_updated_on
     assert_equal previous_journal_count + 1, issue.journals.count
     assert_equal user, journal.user
@@ -73,7 +75,9 @@ class IssueScheduleWriteServiceTest < ActiveSupport::TestCase
     issue = Issue.find(1)
     user = User.find(1)
     previous_journal_count = issue.journals.count
+    old_due_date = issue.due_date
     new_due_date = issue.due_date + 2.days
+    issue.update_columns(first_due_date: nil)
     User.current = user
 
     result = RedmineTxMilestone::IssueScheduleWriteService.apply(
@@ -90,9 +94,32 @@ class IssueScheduleWriteServiceTest < ActiveSupport::TestCase
 
     assert_equal true, result
     assert_equal previous_journal_count + 1, issue.journals.count
+    assert_equal old_due_date, issue.first_due_date
     assert_nil start_date_detail
     assert_not_nil due_date_detail
     assert_equal new_due_date.to_s, due_date_detail.value
+  end
+
+  def test_apply_sets_first_due_date_when_issue_receives_initial_due_date
+    issue = Issue.find(2)
+    user = User.find(1)
+    new_start_date = Date.today
+    new_due_date = Date.today + 5.days
+    issue.update_columns(first_due_date: nil)
+    User.current = user
+
+    result = RedmineTxMilestone::IssueScheduleWriteService.apply(
+      issue: issue,
+      start_date: new_start_date,
+      due_date: new_due_date,
+      user: user
+    )
+
+    issue.reload
+
+    assert_equal true, result
+    assert_equal new_due_date, issue.due_date
+    assert_equal new_due_date, issue.first_due_date
   end
 
   def test_apply_returns_false_without_schedule_changes

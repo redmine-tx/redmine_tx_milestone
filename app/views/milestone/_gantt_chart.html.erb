@@ -358,6 +358,7 @@
                   visible_line_end_date = [line_end_date, end_date].min
                   planning_edge_classes = gantt_schedule_line_edge_css_classes(planning_segments, line_start_date, visible_line_end_date)
                   line_classes.concat(planning_edge_classes.split) if planning_edge_classes.present?
+                  delayed_schedule_segment = gantt_delayed_schedule_segment(issue, line_start_date, visible_line_end_date)
                 %>
                 <div class="<%= line_classes.join(' ') %>" style="width: <%=line_width %>px; top: <%= cell_height -3 %>px;" data-issue-tooltip="<%= issue.id %>"></div>
                 <% planning_segments.each do |segment| %>
@@ -370,6 +371,15 @@
                     planning_width = (planning_end_date - planning_start_date + 1).to_i * cell_width
                   %>
                   <div class="arrow-line-planning-segment" style="left: <%= planning_left %>px; width: <%= planning_width %>px; top: <%= cell_height -3 %>px;" data-issue-tooltip="<%= issue.id %>"></div>
+                <% end %>
+                <% if delayed_schedule_segment %>
+                  <%
+                    delayed_left = (delayed_schedule_segment[:start_date] - line_start_date).to_i * cell_width
+                    delayed_width = (delayed_schedule_segment[:due_date] - delayed_schedule_segment[:start_date] + 1).to_i * cell_width
+                    delayed_segment_classes = ['arrow-line-delayed-segment']
+                    delayed_segment_classes << 'show-after' if delayed_schedule_segment[:due_date] == visible_line_end_date && show_line_after
+                  %>
+                  <div class="<%= delayed_segment_classes.join(' ') %>" style="left: <%= delayed_left %>px; width: <%= delayed_width %>px; top: <%= cell_height -3 %>px;" data-issue-tooltip="<%= issue.id %>"></div>
                 <% end %>
                 <% if overrun_extension_width > 0 %>
                   <div class="arrow-line-overrun" style="left: <%= line_width %>px; width: <%= overrun_extension_width %>px; top: <%= cell_height -3 %>px;" data-issue-tooltip="<%= issue.id %>"></div>

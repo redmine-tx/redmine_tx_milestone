@@ -215,6 +215,35 @@ class RedmineTxMilestoneHelperTest < ActiveSupport::TestCase
     )
   end
 
+  def test_gantt_delayed_schedule_segment_returns_extension_after_first_due_date
+    issue = gantt_issue_stub(
+      id: 500,
+      tracker_id: :work,
+      status_id: :open,
+      start_date: Date.new(2026, 4, 9),
+      due_date: Date.new(2026, 4, 14),
+      first_due_date: Date.new(2026, 4, 11)
+    )
+
+    assert_equal(
+      { start_date: Date.new(2026, 4, 12), due_date: Date.new(2026, 4, 14) },
+      gantt_delayed_schedule_segment(issue, Date.new(2026, 4, 9), Date.new(2026, 4, 14))
+    )
+  end
+
+  def test_gantt_delayed_schedule_segment_returns_nil_without_delay
+    issue = gantt_issue_stub(
+      id: 501,
+      tracker_id: :work,
+      status_id: :open,
+      start_date: Date.new(2026, 4, 9),
+      due_date: Date.new(2026, 4, 11),
+      first_due_date: Date.new(2026, 4, 11)
+    )
+
+    assert_nil gantt_delayed_schedule_segment(issue, Date.new(2026, 4, 9), Date.new(2026, 4, 11))
+  end
+
   def test_gantt_parent_planning_segments_map_treats_due_only_planning_child_as_single_day_segment
     parent = gantt_issue_stub(id: 100, tracker_id: :work, status_id: :open)
     planning_child = gantt_issue_stub(id: 302, tracker_id: :planning, status_id: :open, parent_id: 100, start_date: nil, due_date: Date.new(2026, 4, 9))
@@ -260,7 +289,7 @@ class RedmineTxMilestoneHelperTest < ActiveSupport::TestCase
 
   private
 
-  def gantt_issue_stub(id:, tracker_id:, status_id:, subject: nil, parent_id: nil, start_date: Date.today, due_date: Date.today, ancestor_id: nil)
+  def gantt_issue_stub(id:, tracker_id:, status_id:, subject: nil, parent_id: nil, start_date: Date.today, due_date: Date.today, first_due_date: nil, ancestor_id: nil)
     OpenStruct.new(
       id: id,
       subject: subject || "Issue #{id}",
@@ -269,6 +298,7 @@ class RedmineTxMilestoneHelperTest < ActiveSupport::TestCase
       parent_id: parent_id,
       start_date: start_date,
       due_date: due_date,
+      first_due_date: first_due_date,
       ancestor_id: ancestor_id
     )
   end

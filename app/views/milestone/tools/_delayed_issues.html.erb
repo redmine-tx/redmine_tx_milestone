@@ -81,18 +81,18 @@
   <% else %>
     <% if grade_a_issues.any? %>
       <h2>1달 이상 연기된 일감</h2>
-      <%= render_issues( l(:label_sc_report_my_page_caution), @project, grade_a_issues, [:id, :tracker, :priority, :status, :category, :assigned_to, :subject, :fixed_version_plus, :done_ratio, :due_date, :tags_relations] ) %>
+      <%= render_issues( l(:label_sc_report_my_page_caution), @project, grade_a_issues, [:id, :tracker, :priority, :status, :category, :assigned_to, :subject, :fixed_version_plus, :done_ratio, :first_due_date, :due_date, :tags_relations] ) %>
     <% end %>
     <% if grade_b_issues.any? %>
       <h2>1주일 초과 연기된 일감</h2>
-      <%= render_issues( l(:label_sc_report_my_page_caution), @project, grade_b_issues, [:id, :tracker, :priority, :status, :category, :assigned_to, :subject, :fixed_version_plus, :done_ratio, :due_date, :tags_relations] ) %>
+      <%= render_issues( l(:label_sc_report_my_page_caution), @project, grade_b_issues, [:id, :tracker, :priority, :status, :category, :assigned_to, :subject, :fixed_version_plus, :done_ratio, :first_due_date, :due_date, :tags_relations] ) %>
     <% end %>
     <% if grade_c_issues.any? %>
       <h2>3~5일 연기된 일감</h2>
-      <%= render_issues( l(:label_sc_report_my_page_caution), @project, grade_c_issues, [:id, :tracker, :priority, :status, :category, :assigned_to, :subject, :fixed_version_plus, :done_ratio, :due_date, :tags_relations] ) %>
+      <%= render_issues( l(:label_sc_report_my_page_caution), @project, grade_c_issues, [:id, :tracker, :priority, :status, :category, :assigned_to, :subject, :fixed_version_plus, :done_ratio, :first_due_date, :due_date, :tags_relations] ) %>
     <% end %>
     <% if grade_d_issues.any? %>
       <h2>1~2일 연기된 일감</h2>
-      <%= render_issues( l(:label_sc_report_my_page_caution), @project, grade_d_issues, [:id, :tracker, :priority, :status, :category, :assigned_to, :subject, :fixed_version_plus, :done_ratio, :due_date, :tags_relations] ) %>
+      <%= render_issues( l(:label_sc_report_my_page_caution), @project, grade_d_issues, [:id, :tracker, :priority, :status, :category, :assigned_to, :subject, :fixed_version_plus, :done_ratio, :first_due_date, :due_date, :tags_relations] ) %>
     <% end %>
   <% end %>

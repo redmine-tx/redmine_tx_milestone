@@ -398,6 +398,22 @@ module RedmineTxMilestoneHelper
     classes.join(' ')
   end
 
+  def gantt_delayed_schedule_segment(issue, line_start_date, visible_line_end_date)
+    return nil unless issue.respond_to?(:first_due_date)
+    return nil unless issue.first_due_date.present? && issue.due_date.present?
+    return nil unless issue.due_date.to_date > issue.first_due_date.to_date
+    return nil unless line_start_date.present? && visible_line_end_date.present?
+
+    segment_start = [issue.first_due_date.to_date + 1.day, line_start_date].max
+    segment_end = [issue.due_date.to_date, visible_line_end_date].min
+    return nil if segment_start > segment_end
+
+    {
+      start_date: segment_start,
+      due_date: segment_end
+    }
+  end
+
   def gantt_parent_planning_segments_map(issues, descendant_issues = nil)
     displayed_issue_ids = Array(issues).map(&:id).compact
     return {} if displayed_issue_ids.empty?
@@ -549,6 +565,7 @@ module RedmineTxMilestoneHelper
                   :gantt_top_level_overrun_due_dates, :gantt_date_range,
                   :gantt_schedule_required?, :gantt_missing_due_date?,
                   :gantt_schedule_line_css_classes, :gantt_schedule_line_edge_css_classes,
+                  :gantt_delayed_schedule_segment,
                   :gantt_parent_planning_segments_map,
                   :gantt_visible_descendants_for,
                   :gantt_merge_date_segments,

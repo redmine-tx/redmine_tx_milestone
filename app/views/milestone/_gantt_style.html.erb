@@ -2,6 +2,7 @@
   /* gantt-wrapper: 간트 차트 전체 컨테이너의 스타일 초기화 */
   .gantt-wrapper {
     all: initial; /* 모든 CSS 속성을 초기값으로 설정 (상속 방지) */
+    --delayed-line-color: #d32f2f;
     --planning-line-color: #33b5ff;
     --planning-outline-color: rgba(255, 255, 255, 0.65);
     * {
@@ -256,6 +257,27 @@
     outline: 1px solid var(--planning-outline-color);
     z-index: 16;
     pointer-events: none;
+  }
+
+  .gantt-wrapper .arrow-line-delayed-segment {
+    position: absolute;
+    height: 2px;
+    background-color: var(--delayed-line-color);
+    z-index: 17;
+    pointer-events: none;
+  }
+
+  .gantt-wrapper .arrow-line-delayed-segment.show-after::after {
+    content: '';
+    position: absolute;
+    top: -4px;
+    width: 2px;
+    height: 4px;
+    background-color: inherit;
+  }
+
+  .gantt-wrapper .arrow-line-delayed-segment.show-after::after {
+    right: 0;
   }
 
   .gantt-wrapper .arrow-line-overrun {
