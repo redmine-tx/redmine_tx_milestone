@@ -57,7 +57,7 @@
 
       # 목표버전이 변경된 경우 delayed 를 false 로 초기화 하고 delayed_days 를 0 으로 초기화
       fixed_version_detail = journal.visible_details.find { |d| d.prop_key == 'fixed_version_id' }
-      if fixed_version_detail && fixed_version_detail.old_value.present? != fixed_version_detail.value.present? && fixed_version_detail.old_value.present?
+      if fixed_version_detail && TxBaseHelper.version_delay_reset?(fixed_version_detail.old_value, fixed_version_detail.value)
         delayed = false
         delayed_days = 0
       end
