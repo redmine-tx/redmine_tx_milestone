@@ -30,6 +30,29 @@
 
   <br>
 
+  <h3>검토 일감 설정</h3>
+  <p>
+    <% selected_review_version_custom_field_ids = RedmineTxMilestoneHelper.review_version_custom_field_ids(@settings) %>
+    <% available_review_version_custom_fields = RedmineTxMilestoneHelper.available_review_version_custom_fields %>
+    <label for="settings_setting_milestone_review_version_custom_field_ids">검토 일감 목표버전 커스텀필드</label><br>
+    <%= hidden_field_tag "settings[setting_milestone_review_version_custom_field_ids][]", "", id: nil %>
+    <%= select_tag "settings[setting_milestone_review_version_custom_field_ids][]",
+                   options_from_collection_for_select(
+                     available_review_version_custom_fields,
+                     :id,
+                     :name,
+                     selected_review_version_custom_field_ids
+                   ),
+                   multiple: true,
+                   id: 'settings_setting_milestone_review_version_custom_field_ids',
+                   size: [[available_review_version_custom_fields.size, 4].max, 10].min,
+                   disabled: available_review_version_custom_fields.blank?,
+                   style: 'min-width: 320px; width: 100%; max-width: 480px;' %>
+    <span class="description">선택한 version 타입 이슈 커스텀필드 값이 간트의 목표버전과 같고, 실제 목표버전은 다른 일감을 검토 일감 간트차트에 표시합니다.</span>
+  </p>
+
+  <br>
+
   <h3>마감기한 설정</h3>
   <p class="description">마일스톤 마감일 이전에 표시할 일정 마크를 설정합니다.</p>
 

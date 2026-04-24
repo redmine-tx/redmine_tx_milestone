@@ -2,6 +2,8 @@ module RedmineTxMilestoneHelper
   # TxBaseHelper의 일감 테이블 헬퍼 메서드 사용
   include TxBaseHelper
 
+  REVIEW_VERSION_CUSTOM_FIELD_SETTING = 'setting_milestone_review_version_custom_field_ids'.freeze
+
   def self.major_issue_tags_plugin_available?
     Redmine::Plugin.respond_to?(:installed?) &&
       Redmine::Plugin.installed?(:redmineup_tags) &&
@@ -26,6 +28,23 @@ module RedmineTxMilestoneHelper
     []
   end
 
+  def self.review_version_custom_field_ids(settings = Setting.plugin_redmine_tx_milestone)
+    Array(settings&.[](REVIEW_VERSION_CUSTOM_FIELD_SETTING))
+      .map(&:to_s)
+      .reject(&:blank?)
+      .map(&:to_i)
+      .select(&:positive?)
+      .uniq
+  end
+
+  def self.available_review_version_custom_fields
+    return [] unless defined?(IssueCustomField)
+
+    IssueCustomField.where(field_format: 'version').order(:name).to_a
+  rescue StandardError
+    []
+  end
+
   def milestone_major_issues(issues)
     filtered_issues = block_given? ? Array(issues).select { |issue| yield(issue) } : Array(issues)
     selected_tags = RedmineTxMilestoneHelper.major_issue_tag_names
@@ -38,6 +57,19 @@ module RedmineTxMilestoneHelper
     ).map(&:id)
 
     filtered_issues.select { |issue| tagged_issue_ids.include?(issue.id) }
+  end
+
+  def milestone_review_issues(version)
+    custom_field_ids = RedmineTxMilestoneHelper.review_version_custom_field_ids
+    return [] if version.blank? || custom_field_ids.blank?
+
+    Issue.joins(:custom_values)
+         .where(tracker_id: Tracker.roadmap_trackers_ids)
+         .where.not(status_id: IssueStatus.discarded_ids)
+         .where(custom_values: { custom_field_id: custom_field_ids, value: version.id.to_s })
+         .where("#{Issue.table_name}.fixed_version_id IS NULL OR #{Issue.table_name}.fixed_version_id <> ?", version.id)
+         .distinct
+         .to_a
   end
 
   # 버전별 색상 코드 반환 메소드
@@ -559,7 +591,8 @@ module RedmineTxMilestoneHelper
     end
   end
 
-  module_function :get_version_color, :build_issue_query, :render_issues,
+  module_function :milestone_review_issues,
+                  :get_version_color, :build_issue_query, :render_issues,
                   :build_bug_issues_filter_params, :link_to_issue_with_id, :link_to_bug_issues_count,
                   :gantt_issue_css_class, :gantt_paused_periods, :gantt_depth_map,
                   :gantt_top_level_overrun_due_dates, :gantt_date_range,

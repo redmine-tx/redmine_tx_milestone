@@ -42,6 +42,7 @@
     major_issues = selected_major_issue_tags.present? ? milestone_major_issues(main_issues) : []
     major_issue_ids = major_issues.map(&:id)
     remaining_main_issues = main_issues.reject { |issue| major_issue_ids.include?(issue.id) }
+    review_issues = milestone_review_issues(selected_version)
 
     sort_issues = lambda do |issues|
       issues.sort_by! do |issue|
@@ -62,6 +63,7 @@
     # 이후 시작일 오름차순, 마지막으로 done_ratio 오름차순을 적용한다.
     sort_issues.call(major_issues)
     sort_issues.call(remaining_main_issues)
+    sort_issues.call(review_issues)
 %>
 <h3><%= link_to selected_version.name.to_s, "/versions/#{selected_version.id}/edit" %></h3>
 <% if major_issues.any? %>
@@ -72,6 +74,11 @@
 <% if remaining_main_issues.any? %>
 <div class="version-box">
     <%= render :partial => 'milestone/gantt_chart', locals: { title: '메인 일감', issues: remaining_main_issues, due_date: selected_version.effective_date, date_marks: selected_version.marks, gantt_opts: { show_status_history: false } } %>
+</div>
+<% end %>
+<% if review_issues.any? %>
+<div class="version-box">
+    <%= render :partial => 'milestone/gantt_chart', locals: { title: '검토 일감', issues: review_issues, due_date: selected_version.effective_date, date_marks: selected_version.marks, gantt_opts: { show_status_history: false } } %>
 </div>
 <% end %>
 

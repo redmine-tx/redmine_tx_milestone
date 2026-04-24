@@ -31,6 +31,7 @@ Redmine::Plugin.register :redmine_tx_milestone do
     ],
     'setting_milestone_dev_complete_index' => '0',
     'setting_milestone_major_issue_tags' => [],
+    'setting_milestone_review_version_custom_field_ids' => [],
     'setting_milestone_use_redmine_auto_schedule' => 'false',
     'enable_ai_summary_dashboard' => 'true',
     'enable_ai_summary_schedule' => 'false',
