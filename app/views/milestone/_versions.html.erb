@@ -78,7 +78,7 @@
 <% end %>
 <% if review_issues.any? %>
 <div class="version-box">
-    <%= render :partial => 'milestone/gantt_chart', locals: { title: '검토 일감', issues: review_issues, due_date: selected_version.effective_date, date_marks: selected_version.marks, gantt_opts: { show_status_history: false } } %>
+    <%= render :partial => 'milestone/gantt_chart', locals: { title: '이관 대기 일감', issues: review_issues, due_date: selected_version.effective_date, date_marks: selected_version.marks, gantt_opts: { show_status_history: false } } %>
 </div>
 <% end %>
 
