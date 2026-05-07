@@ -318,40 +318,53 @@ class RedmineTxMilestoneHelperTest < ActiveSupport::TestCase
     assert_operator date_range[:end_date], :>=, late_planning_date
   end
 
-  def test_gantt_due_date_blocked_range_caps_after_due_date
-    due_date = Date.today - 10.days
-    chart_start_date = Date.today - 15.days
-    chart_end_date = Date.today + 60.days
-
-    assert_equal(
-      {
-        start_date: due_date + 1.day,
-        end_date: due_date + 15.days
-      },
-      gantt_due_date_blocked_range(due_date, chart_start_date, chart_end_date)
-    )
-  end
-
-  def test_gantt_due_date_blocked_range_ignores_very_old_due_date
+  def test_gantt_date_range_caps_stale_due_date_after_15_days
     due_date = Date.today - 90.days
-    chart_start_date = Date.today - 15.days
-    chart_end_date = Date.today + 5.days
+    issue = gantt_issue_stub(
+      id: 100,
+      tracker_id: :work,
+      status_id: :open,
+      start_date: due_date - 5.days,
+      due_date: due_date
+    )
 
-    assert_nil gantt_due_date_blocked_range(due_date, chart_start_date, chart_end_date)
+    date_range = gantt_date_range([issue], {}, due_date)
+
+    assert_equal due_date + 15.days, date_range[:end_date]
+    assert_operator date_range[:end_date], :<, Date.today
   end
 
-  def test_gantt_due_date_blocked_range_clamps_to_visible_chart
-    due_date = Date.today - 10.days
-    chart_start_date = Date.today - 5.days
-    chart_end_date = Date.today + 5.days
-
-    assert_equal(
-      {
-        start_date: chart_start_date,
-        end_date: chart_end_date
-      },
-      gantt_due_date_blocked_range(due_date, chart_start_date, chart_end_date)
+  def test_gantt_date_range_keeps_late_issue_dates_for_stale_due_date
+    due_date = Date.today - 90.days
+    late_due_date = due_date + 30.days
+    issue = gantt_issue_stub(
+      id: 101,
+      tracker_id: :work,
+      status_id: :open,
+      start_date: due_date - 5.days,
+      due_date: late_due_date
     )
+
+    date_range = gantt_date_range([issue], {}, due_date)
+
+    assert_equal late_due_date + 5.days, date_range[:end_date]
+    assert_operator date_range[:end_date], :<, Date.today
+  end
+
+  def test_gantt_date_range_uses_today_window_for_recent_due_date
+    due_date = Date.today - 10.days
+    issue = gantt_issue_stub(
+      id: 102,
+      tracker_id: :work,
+      status_id: :open,
+      start_date: due_date - 5.days,
+      due_date: due_date
+    )
+
+    date_range = gantt_date_range([issue], {}, due_date)
+
+    assert_operator date_range[:start_date], :<=, Date.today
+    assert_operator date_range[:end_date], :>=, Date.today + 5.days
   end
 
   private

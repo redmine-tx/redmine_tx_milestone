@@ -60,8 +60,10 @@
   start_date = date_info[:start_date]
   end_date = date_info[:end_date]
   today_index = date_info[:today_index]
+  due_date_index = date_info[:due_date_index]
   total_days = date_info[:total_days]
-  blocked_range = gantt_due_date_blocked_range(_due_date, start_date, end_date, gantt_opts)
+  show_today_column = Date.today >= start_date && Date.today <= end_date
+  visible_date_marks = date_marks.select { |data| data[:date] && data[:date] >= start_date && data[:date] <= end_date }
 
   _issues = gantt_prepare_issues(issues, depth_map_hash)
 
@@ -217,16 +219,16 @@
       <% end %>
 
       <!-- 오늘 날짜 표시선 -->
-      <div class="today-column" style="left: <%= (today_index * cell_width) %>px; top: <%=cell_height + 1 %>px;"></div>
-      <div class="today-column" style="left: <%= (today_index * cell_width) + cell_width %>px; top: <%=cell_height + 1 %>px;"></div>
-      <% if blocked_range %>
-        <% blocked_start_index = (blocked_range[:start_date] - start_date).to_i %>
-        <% blocked_days = (blocked_range[:end_date] - blocked_range[:start_date]).to_i + 1 %>
-        <div class="blocked-grid" style="left: <%= (blocked_start_index * cell_width) %>px; top: <%=cell_height + 1 %>px; width: <%= cell_width * blocked_days %>px;"></div>
+      <% if show_today_column %>
+        <div class="today-column" style="left: <%= (today_index * cell_width) %>px; top: <%=cell_height + 1 %>px;"></div>
+        <div class="today-column" style="left: <%= (today_index * cell_width) + cell_width %>px; top: <%=cell_height + 1 %>px;"></div>
+      <% end %>
+      <% if defined?(due_date) && due_date %>
+        <div class="blocked-grid" style="left: <%= (due_date_index * cell_width) %>px; top: <%=cell_height + 1 %>px; width: <%= cell_width * ( ( end_date - due_date ).to_i )  %>px;"></div>
       <% end %>
 
-      <% if date_marks.any? then %>
-        <% date_marks.each_with_index do |data, index|
+      <% if visible_date_marks.any? then %>
+        <% visible_date_marks.each_with_index do |data, index|
           _value = data[:name]
           _date = data[:date]
           _is_deadline = data[:is_deadline]

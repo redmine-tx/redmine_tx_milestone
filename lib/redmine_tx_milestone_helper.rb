@@ -367,17 +367,30 @@ module RedmineTxMilestoneHelper
     after_length = gantt_opts[:after_length] || 30.days
 
     extra_dates = Array(extra_dates).compact
-    min_date = (issues.map { |issue| [issue.start_date, issue.begin_time&.to_date] }.flatten + extra_dates).compact.min
+    min_dates = issues.map { |issue| [issue.start_date, issue.begin_time&.to_date] }.flatten.compact
+    min_date = (min_dates + extra_dates).compact.min
     before_length = [ (min_date ? (Date.today - min_date).days + 1.days : 15.days), 15.days ].max unless gantt_opts[:before_length]
 
     max_dates = issues.map { |issue| [issue.due_date, issue.end_time&.to_date] }.flatten.compact
+    max_dates.concat(issues.filter_map { |issue| issue.start_date if issue.due_date.nil? })
+    max_dates.concat(issues.filter_map { |issue| Date.today if issue.begin_time.present? && issue.end_time.nil? })
     max_dates.concat(extra_dates)
     max_date = max_dates.max
     after_length = [ (max_date ? (max_date - Date.today).days + 5.days : 5.days), 5.days ].max unless gantt_opts[:after_length]
     after_length = [ after_length, (due_date - Date.today).days + 5.days ].max if due_date
 
-    start_date = Date.today - before_length
-    end_date = Date.today + after_length
+    if due_date.present? && !gantt_opts[:before_length] && !gantt_opts[:after_length]
+      stale_date_range = gantt_stale_due_date_range(min_dates, max_dates, due_date, gantt_opts)
+    end
+
+    if stale_date_range
+      start_date = stale_date_range[:start_date]
+      end_date = stale_date_range[:end_date]
+    else
+      start_date = Date.today - before_length
+      end_date = Date.today + after_length
+    end
+
     today_index = (Date.today - start_date).to_i
     due_date_index = due_date ? (due_date - start_date).to_i + 1 : nil
     total_days = (end_date - start_date).to_i
@@ -391,19 +404,26 @@ module RedmineTxMilestoneHelper
     }
   end
 
-  def gantt_due_date_blocked_range(due_date, chart_start_date, chart_end_date, gantt_opts = {})
-    return nil unless due_date.present? && chart_start_date.present? && chart_end_date.present?
+  def gantt_stale_due_date_range(min_dates, max_dates, due_date, gantt_opts = {})
+    stale_due_after_length = gantt_opts.fetch(:stale_due_after_length, 15.days)
+    return nil if stale_due_after_length == false
 
-    blocked_after_due_length = gantt_opts.fetch(:blocked_after_due_length, 15.days)
-    return nil if blocked_after_due_length == false
+    due_cap_date = due_date + stale_due_after_length
+    return nil if due_cap_date >= Date.today
 
-    block_start = [due_date + 1.day, chart_start_date].max
-    block_end = [due_date + blocked_after_due_length, chart_end_date].min
-    return nil if block_start > block_end
+    all_dates = (Array(min_dates) + Array(max_dates) + [due_date]).compact
+    min_date = all_dates.min || due_date
+    max_date = all_dates.max || due_date
+
+    end_date = if max_date > due_cap_date
+                 max_date + 5.days
+               else
+                 due_cap_date
+               end
 
     {
-      start_date: block_start,
-      end_date: block_end
+      start_date: [min_date - 1.day, end_date].min,
+      end_date: end_date
     }
   end
 
@@ -636,7 +656,7 @@ module RedmineTxMilestoneHelper
                   :build_bug_issues_filter_params, :link_to_issue_with_id, :link_to_bug_issues_count,
                   :gantt_issue_css_class, :gantt_paused_periods, :gantt_depth_map,
                   :gantt_top_level_overrun_due_dates, :gantt_date_range,
-                  :gantt_due_date_blocked_range,
+                  :gantt_stale_due_date_range,
                   :gantt_schedule_required?, :gantt_missing_due_date?,
                   :gantt_schedule_line_css_classes, :gantt_schedule_line_edge_css_classes,
                   :gantt_delayed_schedule_segment,
