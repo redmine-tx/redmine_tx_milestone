@@ -318,6 +318,42 @@ class RedmineTxMilestoneHelperTest < ActiveSupport::TestCase
     assert_operator date_range[:end_date], :>=, late_planning_date
   end
 
+  def test_gantt_due_date_blocked_range_caps_after_due_date
+    due_date = Date.today - 10.days
+    chart_start_date = Date.today - 15.days
+    chart_end_date = Date.today + 60.days
+
+    assert_equal(
+      {
+        start_date: due_date + 1.day,
+        end_date: due_date + 15.days
+      },
+      gantt_due_date_blocked_range(due_date, chart_start_date, chart_end_date)
+    )
+  end
+
+  def test_gantt_due_date_blocked_range_ignores_very_old_due_date
+    due_date = Date.today - 90.days
+    chart_start_date = Date.today - 15.days
+    chart_end_date = Date.today + 5.days
+
+    assert_nil gantt_due_date_blocked_range(due_date, chart_start_date, chart_end_date)
+  end
+
+  def test_gantt_due_date_blocked_range_clamps_to_visible_chart
+    due_date = Date.today - 10.days
+    chart_start_date = Date.today - 5.days
+    chart_end_date = Date.today + 5.days
+
+    assert_equal(
+      {
+        start_date: chart_start_date,
+        end_date: chart_end_date
+      },
+      gantt_due_date_blocked_range(due_date, chart_start_date, chart_end_date)
+    )
+  end
+
   private
 
   def gantt_issue_stub(id:, tracker_id:, status_id:, subject: nil, parent_id: nil, start_date: Date.today, due_date: Date.today, first_due_date: nil, ancestor_id: nil)

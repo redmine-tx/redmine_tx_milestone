@@ -391,6 +391,22 @@ module RedmineTxMilestoneHelper
     }
   end
 
+  def gantt_due_date_blocked_range(due_date, chart_start_date, chart_end_date, gantt_opts = {})
+    return nil unless due_date.present? && chart_start_date.present? && chart_end_date.present?
+
+    blocked_after_due_length = gantt_opts.fetch(:blocked_after_due_length, 15.days)
+    return nil if blocked_after_due_length == false
+
+    block_start = [due_date + 1.day, chart_start_date].max
+    block_end = [due_date + blocked_after_due_length, chart_end_date].min
+    return nil if block_start > block_end
+
+    {
+      start_date: block_start,
+      end_date: block_end
+    }
+  end
+
   def gantt_schedule_required?(issue)
     !Tracker.is_exception?(issue.tracker_id) &&
       !Tracker.is_sidejob?(issue.tracker_id) &&
@@ -620,6 +636,7 @@ module RedmineTxMilestoneHelper
                   :build_bug_issues_filter_params, :link_to_issue_with_id, :link_to_bug_issues_count,
                   :gantt_issue_css_class, :gantt_paused_periods, :gantt_depth_map,
                   :gantt_top_level_overrun_due_dates, :gantt_date_range,
+                  :gantt_due_date_blocked_range,
                   :gantt_schedule_required?, :gantt_missing_due_date?,
                   :gantt_schedule_line_css_classes, :gantt_schedule_line_edge_css_classes,
                   :gantt_delayed_schedule_segment,
