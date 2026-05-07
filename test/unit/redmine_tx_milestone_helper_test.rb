@@ -287,6 +287,37 @@ class RedmineTxMilestoneHelperTest < ActiveSupport::TestCase
     end
   end
 
+  def test_gantt_planning_line_bounds_uses_visible_planning_segment_range
+    segments = [
+      { start_date: Date.new(2026, 4, 1), due_date: Date.new(2026, 4, 3) },
+      { start_date: Date.new(2026, 4, 5), due_date: Date.new(2026, 4, 8) }
+    ]
+
+    assert_equal(
+      { start_date: Date.new(2026, 4, 2), due_date: Date.new(2026, 4, 6) },
+      gantt_planning_line_bounds(segments, Date.new(2026, 4, 2), Date.new(2026, 4, 6))
+    )
+  end
+
+  def test_gantt_planning_line_bounds_returns_nil_without_visible_segments
+    segments = [
+      { start_date: Date.new(2026, 4, 1), due_date: Date.new(2026, 4, 3) }
+    ]
+
+    assert_nil gantt_planning_line_bounds(segments, Date.new(2026, 4, 4), Date.new(2026, 4, 6))
+  end
+
+  def test_gantt_date_range_includes_extra_dates
+    issue = gantt_issue_stub(id: 100, tracker_id: :work, status_id: :open, start_date: nil, due_date: nil)
+    early_planning_date = Date.today - 40.days
+    late_planning_date = Date.today + 45.days
+
+    date_range = gantt_date_range([issue], {}, nil, [early_planning_date, late_planning_date])
+
+    assert_operator date_range[:start_date], :<=, early_planning_date
+    assert_operator date_range[:end_date], :>=, late_planning_date
+  end
+
   private
 
   def gantt_issue_stub(id:, tracker_id:, status_id:, subject: nil, parent_id: nil, start_date: Date.today, due_date: Date.today, first_due_date: nil, ancestor_id: nil)

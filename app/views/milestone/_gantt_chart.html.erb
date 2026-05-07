@@ -53,9 +53,10 @@
   depth_map_hash = gantt_depth_map(issues)
   overrun_due_dates = gantt_top_level_overrun_due_dates(issues)
   planning_segments_map = gantt_parent_planning_segments_map(issues)
+  planning_segment_dates = planning_segments_map.values.flatten.flat_map { |segment| [segment[:start_date], segment[:due_date]] }
 
   _due_date = defined?(due_date) && due_date ? due_date : nil
-  date_info = gantt_date_range(issues, gantt_opts, _due_date, overrun_due_dates.values)
+  date_info = gantt_date_range(issues, gantt_opts, _due_date, overrun_due_dates.values + planning_segment_dates)
   start_date = date_info[:start_date]
   end_date = date_info[:end_date]
   today_index = date_info[:today_index]
@@ -262,22 +263,34 @@
           %>
 
           <%
-            show_line = !Tracker.is_exception?( issue.tracker_id ) && ( ( issue.due_date && issue.due_date >= start_date ) || ( issue.start_date && issue.due_date.nil? ) || ( issue.start_date && issue.start_date >= start_date && issue.start_date <= end_date ) )
+            planning_segments = planning_segments_map[issue.id] || []
+            planning_line_bounds = gantt_planning_line_bounds(planning_segments, start_date, end_date)
+            issue_schedule_line = !Tracker.is_exception?( issue.tracker_id ) && ( ( issue.due_date && issue.due_date >= start_date ) || ( issue.start_date && issue.due_date.nil? ) || ( issue.start_date && issue.start_date >= start_date && issue.start_date <= end_date ) )
+            planning_only_line = !issue_schedule_line && !Tracker.is_exception?( issue.tracker_id ) && planning_line_bounds.present?
+            show_line = issue_schedule_line || planning_only_line
             show_line_before = ( issue.start_date && issue.start_date >= start_date )
             show_line_after = ( issue.due_date && issue.due_date <= end_date )
-            line_start_date = if issue.start_date && issue.start_date < start_date then
-                                start_date
-                              else
-                                issue.start_date
-                              end
-            line_end_date = if issue.due_date && issue.due_date >= start_date then
-                              issue.due_date
-                            else
-                              end_date
-                            end
 
-            if line_start_date.nil? && line_end_date
-              line_start_date = issue_begin_date && !IssueStatus.is_implemented?( issue.status_id ) ? issue_begin_date : line_end_date
+            if planning_only_line
+              line_start_date = planning_line_bounds[:start_date]
+              line_end_date = planning_line_bounds[:due_date]
+              show_line_before = false
+              show_line_after = false
+            else
+              line_start_date = if issue.start_date && issue.start_date < start_date then
+                                  start_date
+                                else
+                                  issue.start_date
+                                end
+              line_end_date = if issue.due_date && issue.due_date >= start_date then
+                                issue.due_date
+                              else
+                                end_date
+                              end
+
+              if line_start_date.nil? && line_end_date
+                line_start_date = issue_begin_date && !IssueStatus.is_implemented?( issue.status_id ) ? issue_begin_date : line_end_date
+              end
             end
 
             line_width = line_start_date ? ( [ line_end_date, end_date ].min - line_start_date + 1 ).to_i * cell_width : cell_width
@@ -354,13 +367,14 @@
                   line_classes << 'show-after' if show_line_after
                   line_state_classes = gantt_schedule_line_css_classes(issue, virtual_ids)
                   line_classes << line_state_classes if line_state_classes.present?
-                  planning_segments = planning_segments_map[issue.id] || []
                   visible_line_end_date = [line_end_date, end_date].min
                   planning_edge_classes = gantt_schedule_line_edge_css_classes(planning_segments, line_start_date, visible_line_end_date)
                   line_classes.concat(planning_edge_classes.split) if planning_edge_classes.present?
                   delayed_schedule_segment = gantt_delayed_schedule_segment(issue, line_start_date, visible_line_end_date)
                 %>
-                <div class="<%= line_classes.join(' ') %>" style="width: <%=line_width %>px; top: <%= cell_height -3 %>px;" data-issue-tooltip="<%= issue.id %>"></div>
+                <% unless planning_only_line %>
+                  <div class="<%= line_classes.join(' ') %>" style="width: <%=line_width %>px; top: <%= cell_height -3 %>px;" data-issue-tooltip="<%= issue.id %>"></div>
+                <% end %>
                 <% planning_segments.each do |segment| %>
                   <%
                     planning_start_date = [segment[:start_date], line_start_date].max

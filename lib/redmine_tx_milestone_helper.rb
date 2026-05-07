@@ -362,15 +362,16 @@ module RedmineTxMilestoneHelper
   end
 
   # 간트 차트 날짜 범위 계산
-  def gantt_date_range(issues, gantt_opts, due_date, extra_due_dates = [])
+  def gantt_date_range(issues, gantt_opts, due_date, extra_dates = [])
     before_length = gantt_opts[:before_length] || 20.days
     after_length = gantt_opts[:after_length] || 30.days
 
-    min_date = issues.map { |issue| [issue.start_date, issue.begin_time&.to_date] }.flatten.compact.min
+    extra_dates = Array(extra_dates).compact
+    min_date = (issues.map { |issue| [issue.start_date, issue.begin_time&.to_date] }.flatten + extra_dates).compact.min
     before_length = [ (min_date ? (Date.today - min_date).days + 1.days : 15.days), 15.days ].max unless gantt_opts[:before_length]
 
     max_dates = issues.map { |issue| [issue.due_date, issue.end_time&.to_date] }.flatten.compact
-    max_dates.concat(Array(extra_due_dates).compact)
+    max_dates.concat(extra_dates)
     max_date = max_dates.max
     after_length = [ (max_date ? (max_date - Date.today).days + 5.days : 5.days), 5.days ].max unless gantt_opts[:after_length]
     after_length = [ after_length, (due_date - Date.today).days + 5.days ].max if due_date
@@ -480,6 +481,29 @@ module RedmineTxMilestoneHelper
       merged_segments = gantt_merge_date_segments(segments)
       segments_map[issue_id] = merged_segments if merged_segments.any?
     end
+  end
+
+  def gantt_planning_line_bounds(planning_segments, chart_start_date, chart_end_date)
+    visible_segments = Array(planning_segments).filter_map do |segment|
+      segment_start = segment[:start_date]
+      segment_end = segment[:due_date]
+      next unless segment_start.present? && segment_end.present?
+
+      visible_start = [segment_start, chart_start_date].max
+      visible_end = [segment_end, chart_end_date].min
+      next if visible_start > visible_end
+
+      {
+        start_date: visible_start,
+        due_date: visible_end
+      }
+    end
+    return nil if visible_segments.empty?
+
+    {
+      start_date: visible_segments.map { |segment| segment[:start_date] }.min,
+      due_date: visible_segments.map { |segment| segment[:due_date] }.max
+    }
   end
 
   def gantt_visible_descendants_for(issues)
@@ -600,6 +624,7 @@ module RedmineTxMilestoneHelper
                   :gantt_schedule_line_css_classes, :gantt_schedule_line_edge_css_classes,
                   :gantt_delayed_schedule_segment,
                   :gantt_parent_planning_segments_map,
+                  :gantt_planning_line_bounds,
                   :gantt_visible_descendants_for,
                   :gantt_merge_date_segments,
                   :gantt_child_schedule_warning_map, :gantt_child_schedule_warning_details_map,
