@@ -156,6 +156,49 @@ class RedmineTxMilestoneHelperTest < ActiveSupport::TestCase
     end
   end
 
+  def test_gantt_status_periods_from_transitions_groups_paused_and_review_periods
+    transitions = [
+      status_transition(100, Date.new(2026, 4, 1), '1', 'paused'),
+      status_transition(100, Date.new(2026, 4, 3), 'paused', 'work'),
+      status_transition(100, Date.new(2026, 4, 4), 'work', 'review'),
+      status_transition(100, Date.new(2026, 4, 5), 'review', 'review_wait'),
+      status_transition(100, Date.new(2026, 4, 6), 'review_wait', 'implemented'),
+      status_transition(101, Date.new(2026, 4, 7), 'work', 'review')
+    ]
+
+    periods = gantt_status_periods_from_transitions(
+      transitions,
+      {
+        paused: %w[paused],
+        review: %w[review review_wait]
+      }
+    )
+
+    assert_equal(
+      [{ entered_at: Date.new(2026, 4, 1), exited_at: Date.new(2026, 4, 3) }],
+      periods[:paused][100]
+    )
+    assert_equal(
+      [{ entered_at: Date.new(2026, 4, 4), exited_at: Date.new(2026, 4, 6) }],
+      periods[:review][100]
+    )
+    assert_equal(
+      [{ entered_at: Date.new(2026, 4, 7), exited_at: nil }],
+      periods[:review][101]
+    )
+  end
+
+  def test_gantt_bar_period_segment_clips_period_to_visible_bar
+    segment = gantt_bar_period_segment(
+      { entered_at: Date.new(2026, 4, 1), exited_at: Date.new(2026, 4, 5) },
+      Date.new(2026, 4, 3),
+      Date.new(2026, 4, 4),
+      18
+    )
+
+    assert_equal({ left_px: 0, width_px: 36 }, segment)
+  end
+
   def test_gantt_parent_planning_segments_map_collects_direct_child_planning_ranges
     parent = gantt_issue_stub(id: 100, tracker_id: :work, status_id: :open)
     planning_child = gantt_issue_stub(id: 300, tracker_id: :planning, status_id: :open, parent_id: 100, start_date: Date.new(2026, 4, 9), due_date: Date.new(2026, 4, 10))
@@ -380,6 +423,15 @@ class RedmineTxMilestoneHelperTest < ActiveSupport::TestCase
       due_date: due_date,
       first_due_date: first_due_date,
       ancestor_id: ancestor_id
+    )
+  end
+
+  def status_transition(issue_id, created_on, old_value, value)
+    OpenStruct.new(
+      issue_id: issue_id,
+      created_on: created_on,
+      old_value: old_value,
+      value: value
     )
   end
 

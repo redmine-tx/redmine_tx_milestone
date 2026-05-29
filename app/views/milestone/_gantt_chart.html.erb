@@ -49,7 +49,9 @@
   ).call
 
   # 헬퍼 메서드로 비즈니스 로직 분리
-  paused_periods_map = gantt_paused_periods(issues)
+  status_periods_map = gantt_status_periods(issues)
+  paused_periods_map = status_periods_map[:paused] || {}
+  review_periods_map = status_periods_map[:review] || {}
   depth_map_hash = gantt_depth_map(issues)
   overrun_due_dates = gantt_top_level_overrun_due_dates(issues)
   planning_segments_map = gantt_parent_planning_segments_map(issues)
@@ -335,20 +337,21 @@
                               end
                 %>
                 <% if !Tracker.is_exception?( issue.tracker_id ) then %>
-                  <div class="task-bar<%= IssueStatus.is_implemented?( issue.status_id ) ? ' completed' : '' %><%= IssueStatus.is_in_review?( issue.status_id ) ? ' confirm' : '' %>" style="width: <%= bar_width %>px; height: <%=cell_height-4%>px; position: absolute; left: 0; z-index: 1;" data-issue-tooltip="<%= issue.id %>">
+                  <div class="task-bar<%= IssueStatus.is_implemented?( issue.status_id ) ? ' completed' : '' %>" style="width: <%= bar_width %>px; height: <%=cell_height-4%>px; position: absolute; left: 0; z-index: 1;" data-issue-tooltip="<%= issue.id %>">
                     <% if IssueStatus.is_in_progress?( issue.status_id ) %>
-                      <div class="task-bar-progress<%= IssueStatus.is_in_review?( issue.status_id ) ? ' confirm' : '' %>" style="width: <%= issue.done_ratio %>%;"></div>
+                      <div class="task-bar-progress" style="width: <%= issue.done_ratio %>%;"></div>
+                    <% end %>
+                    <%# review 구간 오버레이 %>
+                    <% (review_periods_map[issue.id] || []).each do |period| %>
+                      <% if (segment = gantt_bar_period_segment(period, date, issue_end_date, cell_width)) %>
+                        <div class="task-bar-review" style="left: <%= segment[:left_px] %>px; width: <%= segment[:width_px] %>px;"></div>
+                      <% end %>
                     <% end %>
                     <%# paused 구간 오버레이 %>
                     <% (paused_periods_map[issue.id] || []).each do |period| %>
-                      <%
-                        p_start = [period[:entered_at], date].max
-                        p_end   = [period[:exited_at] || Date.today, issue_end_date].min
-                        next if p_start > p_end || p_start > issue_end_date || p_end < date
-                        left_px  = (p_start - date).to_i * cell_width
-                        width_px = (p_end - p_start + 1).to_i * cell_width
-                      %>
-                      <div class="task-bar-paused" style="left: <%= left_px %>px; width: <%= width_px %>px;"></div>
+                      <% if (segment = gantt_bar_period_segment(period, date, issue_end_date, cell_width)) %>
+                        <div class="task-bar-paused" style="left: <%= segment[:left_px] %>px; width: <%= segment[:width_px] %>px;"></div>
+                      <% end %>
                     <% end %>
                   </div>
                   <div class="task-tooltip-hit" data-issue-tooltip="<%= issue.id %>" style="position: absolute; left: 0; top: 0; width: <%= (show_line && date == line_start_date && line_hit_width > bar_width) ? line_hit_width : bar_width %>px; height: <%= cell_height %>px; z-index: 50;"></div>

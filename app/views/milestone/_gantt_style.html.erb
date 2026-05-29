@@ -204,6 +204,17 @@
     /* width는 JavaScript에서 진행률에 따라 동적으로 설정될 것으로 예상 */
   }
 
+  /* task-bar-review: review 구간 오버레이 */
+  .gantt-wrapper .task-bar-review {
+    position: absolute;
+    top: 0;
+    height: 100%;
+    background: #ffeb3b;
+    border-radius: 0.1875em;
+    z-index: 2;
+    pointer-events: none;
+  }
+
   /* task-bar-paused: paused 구간 오버레이 (사선 줄무늬) */
   .gantt-wrapper .task-bar-paused {
     position: absolute;
@@ -223,14 +234,6 @@
 
   .gantt-wrapper .task-bar.completed {
     background: #ddd;
-  }
-
-  .gantt-wrapper .task-bar.confirm {
-    background: #ffeb3b;
-  }
-
-  .gantt-wrapper .task-bar-progress.confirm {
-    background: #ffc107; /* 더 어두운 노란색으로 변경하여 진행률을 구분 */
   }
 
   /* arrow-line: 작업 간의 의존성 연결선 */

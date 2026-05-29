@@ -281,31 +281,79 @@ module RedmineTxMilestoneHelper
     end
   end
 
-  # paused 구간 배치 쿼리 (N+1 방지)
-  def gantt_paused_periods(issues)
-    paused_periods_map = {}
-    paused_status_ids = IssueStatus.paused_ids.map(&:to_s)
-    if paused_status_ids.any?
-      paused_transitions = JournalDetail.joins(:journal)
-        .where(journals: { journalized_type: 'Issue', journalized_id: issues.map(&:id) })
-        .where(property: 'attr', prop_key: 'status_id')
-        .where("journal_details.old_value IN (?) OR journal_details.value IN (?)", paused_status_ids, paused_status_ids)
-        .select('journals.journalized_id AS issue_id, journals.created_on, journal_details.old_value, journal_details.value')
-        .order('journals.journalized_id, journals.created_on')
+  # 상태 기간 배치 쿼리 (N+1 방지)
+  def gantt_status_periods(issues)
+    issue_ids = Array(issues).map(&:id).compact
+    status_groups = gantt_status_period_groups
+    watched_status_ids = status_groups.values.flatten.uniq
+    return {} if issue_ids.empty? || watched_status_ids.empty?
 
-      paused_transitions.group_by(&:issue_id).each do |issue_id, trans|
+    status_transitions = JournalDetail.joins(:journal)
+      .where(journals: { journalized_type: 'Issue', journalized_id: issue_ids })
+      .where(property: 'attr', prop_key: 'status_id')
+      .where("journal_details.old_value IN (?) OR journal_details.value IN (?)", watched_status_ids, watched_status_ids)
+      .select('journals.journalized_id AS issue_id, journals.created_on, journal_details.old_value, journal_details.value')
+      .order('journals.journalized_id, journals.created_on')
+
+    gantt_status_periods_from_transitions(status_transitions, status_groups)
+  end
+
+  def gantt_status_period_groups
+    {
+      paused: IssueStatus.paused_ids,
+      review: IssueStatus.in_review_ids
+    }.transform_values { |ids| Array(ids).map(&:to_s).reject(&:blank?).uniq }
+     .reject { |_name, ids| ids.empty? }
+  end
+
+  def gantt_status_periods_from_transitions(transitions, status_groups)
+    periods_map = status_groups.keys.each_with_object({}) { |name, map| map[name] = {} }
+
+    Array(transitions).group_by(&:issue_id).each do |issue_id, issue_transitions|
+      status_groups.each do |name, raw_status_ids|
+        status_ids = Array(raw_status_ids).map(&:to_s)
         periods = []
-        trans.each do |t|
-          if paused_status_ids.include?(t.value.to_s)
-            periods << { entered_at: t.created_on.to_date, exited_at: nil }
-          elsif paused_status_ids.include?(t.old_value.to_s) && periods.last && periods.last[:exited_at].nil?
-            periods.last[:exited_at] = t.created_on.to_date
+
+        issue_transitions.each do |transition|
+          old_in_group = status_ids.include?(transition.old_value.to_s)
+          new_in_group = status_ids.include?(transition.value.to_s)
+          transition_date = transition.created_on.to_date
+
+          if new_in_group && !old_in_group
+            periods << { entered_at: transition_date, exited_at: nil } unless periods.last && periods.last[:exited_at].nil?
+          elsif old_in_group && !new_in_group && periods.last && periods.last[:exited_at].nil?
+            periods.last[:exited_at] = transition_date
           end
         end
-        paused_periods_map[issue_id] = periods if periods.any?
+
+        periods_map[name][issue_id] = periods if periods.any?
       end
     end
-    paused_periods_map
+
+    periods_map
+  end
+
+  # paused 구간만 필요로 하는 기존 호출용 wrapper
+  def gantt_paused_periods(issues)
+    gantt_status_periods(issues).fetch(:paused, {})
+  end
+
+  def gantt_bar_period_segment(period, bar_date, issue_end_date, cell_width)
+    return nil unless period && period[:entered_at] && issue_end_date
+
+    period_start = period[:entered_at].to_date
+    period_end = (period[:exited_at] || Date.today).to_date
+    bar_date = bar_date.to_date
+    issue_end_date = issue_end_date.to_date
+
+    visible_start = [period_start, bar_date].max
+    visible_end = [period_end, issue_end_date].min
+    return nil if visible_start > visible_end || visible_start > issue_end_date || visible_end < bar_date
+
+    {
+      left_px: (visible_start - bar_date).to_i * cell_width,
+      width_px: (visible_end - visible_start + 1).to_i * cell_width
+    }
   end
 
   # parent-child depth 계산 (이슈 목록 기반)
@@ -654,7 +702,9 @@ module RedmineTxMilestoneHelper
   module_function :milestone_review_issues,
                   :get_version_color, :build_issue_query, :render_issues,
                   :build_bug_issues_filter_params, :link_to_issue_with_id, :link_to_bug_issues_count,
-                  :gantt_issue_css_class, :gantt_paused_periods, :gantt_depth_map,
+                  :gantt_issue_css_class,
+                  :gantt_status_periods, :gantt_status_period_groups, :gantt_status_periods_from_transitions,
+                  :gantt_paused_periods, :gantt_bar_period_segment, :gantt_depth_map,
                   :gantt_top_level_overrun_due_dates, :gantt_date_range,
                   :gantt_stale_due_date_range,
                   :gantt_schedule_required?, :gantt_missing_due_date?,
