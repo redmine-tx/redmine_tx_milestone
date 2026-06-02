@@ -62,14 +62,26 @@ class MilestoneController < ApplicationController
 
     def update_issue_schedule
       issue = Issue.visible.find(params[:issue_id])
-      start_date = parse_schedule_date(params[:start_date])
-      due_date = parse_schedule_date(params[:due_date])
+      start_date_provided = schedule_param_present?(params, :start_date)
+      due_date_provided = schedule_param_present?(params, :due_date)
+      start_date = start_date_provided ? parse_schedule_date(params[:start_date]) : nil
+      due_date = due_date_provided ? parse_schedule_date(params[:due_date]) : nil
 
       return render_404 unless issue.project == @project
-      return render_schedule_error('시작일과 목표일이 필요합니다.') unless start_date && due_date
-      return render_schedule_error('시작일은 목표일보다 늦을 수 없습니다.') if start_date > due_date
-      return render_schedule_error('기존 시작일과 목표일이 있는 일감만 조정할 수 있습니다.') unless issue.start_date.present? && issue.due_date.present?
-      return render_schedule_error('일정을 수정할 권한이 없습니다.', :forbidden) unless issue_schedule_editable?(issue)
+
+      schedule_change = normalize_issue_schedule_change(
+        issue,
+        start_date_provided: start_date_provided,
+        start_date: start_date,
+        due_date_provided: due_date_provided,
+        due_date: due_date
+      )
+      if schedule_change[:error]
+        return render_schedule_error(schedule_change[:error], schedule_change[:status] || :unprocessable_entity)
+      end
+
+      start_date = schedule_change[:start_date]
+      due_date = schedule_change[:due_date]
 
       same_schedule = issue.start_date == start_date && issue.due_date == due_date
       saved = same_schedule || RedmineTxMilestone::IssueScheduleWriteService.apply(
@@ -87,14 +99,110 @@ class MilestoneController < ApplicationController
       render json: {
         success: true,
         issue_id: issue.id,
-        start_date: start_date.iso8601,
-        due_date: due_date.iso8601,
+        start_date: start_date&.iso8601,
+        due_date: due_date&.iso8601,
         saved: !same_schedule
       }
     rescue ActiveRecord::RecordNotFound
       render_404
     rescue => e
       Rails.logger.error "update_issue_schedule error: #{e.message}\n#{e.backtrace.first(5).join("\n")}"
+      render_schedule_error("일정 저장 중 오류가 발생했습니다: #{e.message}", :internal_server_error)
+    end
+
+    def update_issue_schedules
+      raw_schedules = params[:schedules]
+      raw_schedules = raw_schedules.values if raw_schedules.is_a?(ActionController::Parameters)
+      raw_schedules = Array(raw_schedules)
+
+      return render_schedule_error('저장할 일정 변경이 없습니다.') if raw_schedules.blank?
+
+      normalized_by_issue_id = {}
+      raw_schedules.each do |schedule|
+        issue_id_value = schedule_param_value(schedule, :issue_id) || schedule_param_value(schedule, :id)
+        start_date_provided = schedule_param_present?(schedule, :start_date)
+        due_date_provided = schedule_param_present?(schedule, :due_date)
+        start_date = start_date_provided ? parse_schedule_date(schedule_param_value(schedule, :start_date)) : nil
+        due_date = due_date_provided ? parse_schedule_date(schedule_param_value(schedule, :due_date)) : nil
+
+        return render_schedule_error('일감 ID가 필요합니다.') if issue_id_value.blank?
+
+        issue_id = issue_id_value.to_i
+        normalized_by_issue_id[issue_id] = {
+          issue_id: issue_id,
+          start_date_provided: start_date_provided,
+          start_date: start_date,
+          due_date_provided: due_date_provided,
+          due_date: due_date
+        }
+      end
+
+      schedules = normalized_by_issue_id.values
+      issues = Issue.visible.where(id: schedules.map { |schedule| schedule[:issue_id] }).index_by(&:id)
+
+      schedules.each do |schedule|
+        issue = issues[schedule[:issue_id]]
+        return render_schedule_error('일감을 찾을 수 없습니다.', :not_found) unless issue
+        return render_schedule_error('프로젝트에 속하지 않은 일감입니다.', :not_found) unless issue.project == @project
+
+        schedule_change = normalize_issue_schedule_change(
+          issue,
+          start_date_provided: schedule[:start_date_provided],
+          start_date: schedule[:start_date],
+          due_date_provided: schedule[:due_date_provided],
+          due_date: schedule[:due_date]
+        )
+        if schedule_change[:error]
+          return render_schedule_error(schedule_change[:error], schedule_change[:status] || :unprocessable_entity)
+        end
+
+        schedule[:start_date] = schedule_change[:start_date]
+        schedule[:due_date] = schedule_change[:due_date]
+      end
+
+      saved_count = 0
+      results = []
+      error_message = nil
+
+      ActiveRecord::Base.transaction do
+        schedules.each do |schedule|
+          issue = issues[schedule[:issue_id]]
+          start_date = schedule[:start_date]
+          due_date = schedule[:due_date]
+          same_schedule = issue.start_date == start_date && issue.due_date == due_date
+          saved = same_schedule || RedmineTxMilestone::IssueScheduleWriteService.apply(
+            issue: issue,
+            start_date: start_date,
+            due_date: due_date,
+            user: User.current,
+            note: '간트 일정 변경'
+          )
+
+          unless saved
+            error_message = issue.errors.full_messages.presence&.join(', ') || '일정 저장에 실패했습니다.'
+            raise ActiveRecord::Rollback
+          end
+
+          saved_count += 1 unless same_schedule
+          results << {
+            issue_id: issue.id,
+            start_date: start_date&.iso8601,
+            due_date: due_date&.iso8601,
+            saved: !same_schedule
+          }
+        end
+      end
+
+      return render_schedule_error(error_message) if error_message
+
+      render json: {
+        success: true,
+        schedules: results,
+        saved_count: saved_count,
+        message: "#{saved_count}개 일감의 일정이 저장되었습니다."
+      }
+    rescue => e
+      Rails.logger.error "update_issue_schedules error: #{e.message}\n#{e.backtrace.first(5).join("\n")}"
       render_schedule_error("일정 저장 중 오류가 발생했습니다: #{e.message}", :internal_server_error)
     end
 
@@ -1059,10 +1167,50 @@ class MilestoneController < ApplicationController
       nil
     end
 
-    def issue_schedule_editable?(issue)
+    def normalize_issue_schedule_change(issue, start_date_provided:, start_date:, due_date_provided:, due_date:)
+      return { error: '변경할 일정이 없습니다.' } unless start_date_provided || due_date_provided
+      return { error: '시작일이 필요합니다.' } if start_date_provided && start_date.nil?
+      return { error: '목표일이 필요합니다.' } if due_date_provided && due_date.nil?
+      return { error: '기존 시작일이 있는 일감만 시작일을 조정할 수 있습니다.' } if start_date_provided && issue.start_date.blank?
+      return { error: '기존 목표일이 있는 일감만 목표일을 조정할 수 있습니다.' } if due_date_provided && issue.due_date.blank?
+
+      next_start_date = start_date_provided ? start_date : issue.start_date
+      next_due_date = due_date_provided ? due_date : issue.due_date
+
+      if next_start_date && next_due_date && next_start_date > next_due_date
+        return { error: '시작일은 목표일보다 늦을 수 없습니다.' }
+      end
+
+      unless issue_schedule_editable?(
+        issue,
+        edit_start_date: start_date_provided,
+        edit_due_date: due_date_provided
+      )
+        return { error: '일정을 수정할 권한이 없습니다.', status: :forbidden }
+      end
+
+      {
+        start_date: next_start_date,
+        due_date: next_due_date
+      }
+    end
+
+    def issue_schedule_editable?(issue, edit_start_date: true, edit_due_date: true)
       issue.attributes_editable?(User.current) &&
-        issue.safe_attribute?('start_date', User.current) &&
-        issue.safe_attribute?('due_date', User.current)
+        (!edit_start_date || issue.safe_attribute?('start_date', User.current)) &&
+        (!edit_due_date || issue.safe_attribute?('due_date', User.current))
+    end
+
+    def schedule_param_present?(schedule, key)
+      return false unless schedule.respond_to?(:key?)
+
+      schedule.key?(key) || schedule.key?(key.to_s)
+    end
+
+    def schedule_param_value(schedule, key)
+      return nil unless schedule.respond_to?(:[])
+
+      schedule[key] || schedule[key.to_s]
     end
 
     def render_schedule_error(message, status = :unprocessable_entity)

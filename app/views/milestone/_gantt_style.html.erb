@@ -349,6 +349,50 @@
     cursor: ew-resize;
   }
 
+  .gantt-wrapper .gantt-bulk-edit-actions {
+    position: absolute;
+    top: 6px;
+    right: 8px;
+    z-index: 90;
+    display: none;
+    align-items: center;
+    gap: 6px;
+    padding: 4px;
+    background: rgba(255, 255, 255, 0.94);
+    border: 1px solid #b8c0cc;
+    border-radius: 4px;
+    box-shadow: 0 1px 4px rgba(0, 0, 0, 0.16);
+    font-family: Arial, sans-serif;
+  }
+
+  .gantt-wrapper .gantt-bulk-edit-actions button {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    min-width: 58px;
+    height: 24px;
+    padding: 0 8px;
+    border: 1px solid #9aa4b2;
+    border-radius: 3px;
+    background: #fff;
+    color: #333;
+    font-size: 12px;
+    font-weight: bold;
+    line-height: 1;
+    cursor: pointer;
+  }
+
+  .gantt-wrapper .gantt-bulk-edit-actions .gantt-bulk-save {
+    background: #2f6fd6;
+    border-color: #245bb3;
+    color: #fff;
+  }
+
+  .gantt-wrapper .gantt-bulk-edit-actions button:disabled {
+    opacity: 0.55;
+    cursor: default;
+  }
+
   .gantt-wrapper .gantt-schedule-drag-preview {
     position: absolute;
     height: 7px;
@@ -359,8 +403,20 @@
     pointer-events: none;
   }
 
+  .gantt-wrapper .gantt-schedule-pending-line {
+    position: absolute;
+    height: 7px;
+    border-radius: 4px;
+    background-color: rgba(47, 111, 214, 0.95);
+    box-shadow: 0 0 0 2px rgba(255, 255, 255, 0.9), 0 1px 4px rgba(0, 0, 0, 0.28);
+    z-index: 58;
+    pointer-events: none;
+  }
+
   .gantt-wrapper .gantt-schedule-drag-preview::before,
-  .gantt-wrapper .gantt-schedule-drag-preview::after {
+  .gantt-wrapper .gantt-schedule-drag-preview::after,
+  .gantt-wrapper .gantt-schedule-pending-line::before,
+  .gantt-wrapper .gantt-schedule-pending-line::after {
     content: '';
     position: absolute;
     top: -3px;
@@ -369,11 +425,13 @@
     background-color: inherit;
   }
 
-  .gantt-wrapper .gantt-schedule-drag-preview::before {
+  .gantt-wrapper .gantt-schedule-drag-preview::before,
+  .gantt-wrapper .gantt-schedule-pending-line::before {
     left: 0;
   }
 
-  .gantt-wrapper .gantt-schedule-drag-preview::after {
+  .gantt-wrapper .gantt-schedule-drag-preview::after,
+  .gantt-wrapper .gantt-schedule-pending-line::after {
     right: 0;
   }
 
@@ -494,6 +552,11 @@
   .gantt-wrapper .task-row.context-menu-selection > .task-name a,
   .gantt-wrapper .task-row.context-menu-selection > .assignee a {
     color: white !important;
+  }
+
+  /* Redmine 컨텍스트 메뉴가 tx 이슈 툴팁 레이어보다 위에 오도록 보정 */
+  #context-menu {
+    z-index: 20010;
   }
 
   /* Depth 들여쓰기 */
