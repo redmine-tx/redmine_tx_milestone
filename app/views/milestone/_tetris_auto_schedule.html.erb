@@ -78,12 +78,53 @@
     }
 
     <% if @result_issues.present? %>
+        function addDaysForAutoSchedule(isoDate, days) {
+            var parts = isoDate.split('-').map(function(part) { return parseInt(part, 10); });
+            var date = new Date(Date.UTC(parts[0], parts[1] - 1, parts[2]));
+            date.setUTCDate(date.getUTCDate() + days);
+            return date.toISOString().slice(0, 10);
+        }
+
+        function isoFromGanttJd(ganttEl, jd) {
+            var chartStartDate = ganttEl.getAttribute('data-gantt-start-date');
+            var chartStartJd = parseInt(ganttEl.getAttribute('data-gantt-start-jd'), 10);
+            if (!chartStartDate || isNaN(chartStartJd) || isNaN(jd)) {
+                return null;
+            }
+
+            return addDaysForAutoSchedule(chartStartDate, jd - chartStartJd);
+        }
+
+        function currentAutoScheduleIssueData(fallbackIssueData) {
+            return fallbackIssueData.map(function(data) {
+                var issueId = String(data.id);
+                var line = document.querySelector('.gantt-schedule-line.virtual[data-gantt-schedule="true"][data-issue-id="' + issueId + '"]') ||
+                           document.querySelector('[data-virtual-schedule="true"][data-gantt-schedule="true"][data-issue-id="' + issueId + '"]');
+                var ganttEl = line ? line.closest('.gantt-container') : null;
+                var startJd = line ? parseInt(line.getAttribute('data-start-jd'), 10) : NaN;
+                var dueJd = line ? parseInt(line.getAttribute('data-due-jd'), 10) : NaN;
+                var startDate = ganttEl ? isoFromGanttJd(ganttEl, startJd) : null;
+                var dueDate = ganttEl ? isoFromGanttJd(ganttEl, dueJd) : null;
+
+                if (startDate && dueDate) {
+                    return {
+                        id: data.id,
+                        start_date: startDate,
+                        due_date: dueDate
+                    };
+                }
+
+                return data;
+            });
+        }
+
         function saveAutoSchedule() {
             if (!confirm('배치된 일정을 확정하시겠습니까?')) {
                 return;
             }
 
-            var issueData = <%= @result_issues.map { |i| { id: i.id, start_date: i.start_date.strftime('%Y-%m-%d'), due_date: i.due_date.strftime('%Y-%m-%d') } }.to_json.html_safe %>;
+            var baseIssueData = <%= @result_issues.map { |i| { id: i.id, start_date: i.start_date.strftime('%Y-%m-%d'), due_date: i.due_date.strftime('%Y-%m-%d') } }.to_json.html_safe %>;
+            var issueData = currentAutoScheduleIssueData(baseIssueData);
             
             // 폼 데이터 생성
             var form = document.createElement('form');

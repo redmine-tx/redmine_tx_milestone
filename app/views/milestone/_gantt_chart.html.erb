@@ -333,6 +333,7 @@
             schedule_display_start_date = schedule_start_date || (schedule_has_due_date ? line_start_date : nil)
             schedule_display_due_date = schedule_due_date || (schedule_has_start_date ? end_date : nil)
             schedule_anchor_date = line_start_date
+            schedule_virtual = virtual_ids.include?(issue.id)
             schedule_editable_start = !schedule_has_start_date || issue.safe_attribute?('start_date', User.current)
             schedule_editable_due = !schedule_has_due_date || issue.safe_attribute?('due_date', User.current)
             schedule_draggable = (schedule_has_start_date || schedule_has_due_date) &&
@@ -361,6 +362,7 @@
                                       "data-original-display-start-jd=\"#{schedule_display_start_date.jd}\"",
                                       "data-original-display-due-jd=\"#{schedule_display_due_date.jd}\"",
                                       "data-anchor-jd=\"#{schedule_anchor_date.jd}\"",
+                                      "data-virtual-schedule=\"#{schedule_virtual}\"",
                                       "data-update-url=\"#{h(schedule_update_url)}\""
                                     ].join(' ').html_safe
                                   end
@@ -655,7 +657,8 @@
           originalDisplayStartJd: originalDisplayStartJd,
           originalDisplayDueJd: originalDisplayDueJd,
           displayStartJd: displayStartJd,
-          displayDueJd: displayDueJd
+          displayDueJd: displayDueJd,
+          virtualSchedule: element.getAttribute('data-virtual-schedule') === 'true'
         };
       }
 
@@ -804,6 +807,7 @@
           sourceCell.appendChild(pendingLine);
         }
 
+        pendingLine.classList.toggle('virtual', sourceLine.getAttribute('data-virtual-schedule') === 'true');
         pendingLine.style.left = ((startJd - anchorJd) * cellWidth) + 'px';
         pendingLine.style.top = Math.max(cellHeight - 8, 0) + 'px';
         pendingLine.style.width = ((dueJd - startJd + 1) * cellWidth) + 'px';
@@ -837,6 +841,7 @@
           edit_due_jd: range.editDueJd,
           start_date: state.hasStartDate ? isoFromJd(range.editStartJd) : null,
           due_date: state.hasDueDate ? isoFromJd(range.editDueJd) : null,
+          virtual_schedule: state.virtualSchedule,
           update_url: updateUrl
         };
 
@@ -905,6 +910,7 @@
             edit_due_jd: change.edit_due_jd,
             has_start_date: change.has_start_date,
             has_due_date: change.has_due_date,
+            virtual_schedule: change.virtual_schedule,
             update_url: change.update_url
           };
         });
@@ -924,6 +930,25 @@
         }
 
         return payload;
+      }
+
+      function applySavedScheduleChange(change, savedSchedule) {
+        var issueId = String(change.issue_id);
+        var savedStartJd = jdFromIso(savedSchedule.start_date);
+        var savedDueJd = jdFromIso(savedSchedule.due_date);
+        var displayStartJd = savedStartJd !== null ? savedStartJd : (savedDueJd !== null ? chartStartJd : change.start_jd);
+        var displayDueJd = savedDueJd !== null ? savedDueJd : (savedStartJd !== null ? chartEndJd : change.due_jd);
+
+        updateScheduleElements(issueId, displayStartJd, displayDueJd);
+        updateOriginalRange(issueId, savedStartJd, savedDueJd, displayStartJd, displayDueJd);
+        removePendingLine(issueId);
+      }
+
+      function applyVirtualScheduleChange(change) {
+        var issueId = String(change.issue_id);
+        updateScheduleElements(issueId, change.start_jd, change.due_jd);
+        updateOriginalRange(issueId, change.edit_start_jd, change.edit_due_jd, change.start_jd, change.due_jd);
+        removePendingLine(issueId);
       }
 
       function parseJsonResponse(response, fallbackMessage) {
@@ -983,32 +1008,38 @@
           return;
         }
 
+        var virtualChanges = changes.filter(function(change) {
+          return change.virtual_schedule;
+        });
+        var persistedChanges = changes.filter(function(change) {
+          return !change.virtual_schedule;
+        });
+
         saveInProgress = true;
         $wrapper.addClass('gantt-schedule-bulk-saving');
         updateBulkActions();
 
-        saveChangesRequest(changes).then(function(data) {
+        var request = persistedChanges.length > 0 ? saveChangesRequest(persistedChanges) : Promise.resolve({ schedules: [] });
+
+        request.then(function(data) {
           var savedSchedules = Array.isArray(data) ? data : (data.schedules || []);
           var savedByIssueId = {};
           savedSchedules.forEach(function(savedSchedule) {
             savedByIssueId[String(savedSchedule.issue_id)] = savedSchedule;
           });
 
-          changes.forEach(function(change) {
+          persistedChanges.forEach(function(change) {
             var issueId = String(change.issue_id);
             var savedSchedule = savedByIssueId[issueId];
             if (!savedSchedule) {
               throw new Error('일정 저장 결과를 확인할 수 없습니다.');
             }
 
-            var savedStartJd = jdFromIso(savedSchedule.start_date);
-            var savedDueJd = jdFromIso(savedSchedule.due_date);
-            var displayStartJd = savedStartJd !== null ? savedStartJd : (savedDueJd !== null ? chartStartJd : change.start_jd);
-            var displayDueJd = savedDueJd !== null ? savedDueJd : (savedStartJd !== null ? chartEndJd : change.due_jd);
+            applySavedScheduleChange(change, savedSchedule);
+          });
 
-            updateScheduleElements(issueId, displayStartJd, displayDueJd);
-            updateOriginalRange(issueId, savedStartJd, savedDueJd, displayStartJd, displayDueJd);
-            removePendingLine(issueId);
+          virtualChanges.forEach(function(change) {
+            applyVirtualScheduleChange(change);
           });
 
           pendingChanges = {};
