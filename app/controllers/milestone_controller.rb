@@ -60,6 +60,44 @@ class MilestoneController < ApplicationController
     def gantt
     end
 
+    def update_issue_schedule
+      issue = Issue.visible.find(params[:issue_id])
+      start_date = parse_schedule_date(params[:start_date])
+      due_date = parse_schedule_date(params[:due_date])
+
+      return render_404 unless issue.project == @project
+      return render_schedule_error('시작일과 목표일이 필요합니다.') unless start_date && due_date
+      return render_schedule_error('시작일은 목표일보다 늦을 수 없습니다.') if start_date > due_date
+      return render_schedule_error('기존 시작일과 목표일이 있는 일감만 조정할 수 있습니다.') unless issue.start_date.present? && issue.due_date.present?
+      return render_schedule_error('일정을 수정할 권한이 없습니다.', :forbidden) unless issue_schedule_editable?(issue)
+
+      same_schedule = issue.start_date == start_date && issue.due_date == due_date
+      saved = same_schedule || RedmineTxMilestone::IssueScheduleWriteService.apply(
+        issue: issue,
+        start_date: start_date,
+        due_date: due_date,
+        user: User.current,
+        note: '간트 일정 변경'
+      )
+
+      unless saved
+        return render_schedule_error(issue.errors.full_messages.presence&.join(', ') || '일정 저장에 실패했습니다.')
+      end
+
+      render json: {
+        success: true,
+        issue_id: issue.id,
+        start_date: start_date.iso8601,
+        due_date: due_date.iso8601,
+        saved: !same_schedule
+      }
+    rescue ActiveRecord::RecordNotFound
+      render_404
+    rescue => e
+      Rails.logger.error "update_issue_schedule error: #{e.message}\n#{e.backtrace.first(5).join("\n")}"
+      render_schedule_error("일정 저장 중 오류가 발생했습니다: #{e.message}", :internal_server_error)
+    end
+
     def predict_issue
       render partial: 'milestone/predict_issue', layout: false
     end
@@ -1011,6 +1049,24 @@ class MilestoneController < ApplicationController
   
     def authorize
       raise Unauthorized unless User.current.allowed_to?(:view_milestone, @project)
+    end
+
+    def parse_schedule_date(value)
+      return nil if value.blank?
+
+      Date.iso8601(value.to_s)
+    rescue ArgumentError
+      nil
+    end
+
+    def issue_schedule_editable?(issue)
+      issue.attributes_editable?(User.current) &&
+        issue.safe_attribute?('start_date', User.current) &&
+        issue.safe_attribute?('due_date', User.current)
+    end
+
+    def render_schedule_error(message, status = :unprocessable_entity)
+      render json: { success: false, message: message }, status: status
     end
 
     def group_infos

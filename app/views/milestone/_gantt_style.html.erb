@@ -332,6 +332,60 @@
     background-color: var(--planning-line-color);
   }
 
+  .gantt-wrapper .gantt-schedule-editable {
+    cursor: grab;
+  }
+
+  .gantt-wrapper .gantt-schedule-move-hit {
+    cursor: grab;
+  }
+
+  .gantt-wrapper .gantt-schedule-resize-hit {
+    position: absolute;
+    top: 0;
+    height: 100%;
+    z-index: 56;
+    background: transparent;
+    cursor: ew-resize;
+  }
+
+  .gantt-wrapper .gantt-schedule-drag-preview {
+    position: absolute;
+    height: 7px;
+    border-radius: 4px;
+    background-color: rgba(51, 88, 140, 0.9);
+    box-shadow: 0 0 0 1px rgba(255, 255, 255, 0.85);
+    z-index: 57;
+    pointer-events: none;
+  }
+
+  .gantt-wrapper .gantt-schedule-drag-preview::before,
+  .gantt-wrapper .gantt-schedule-drag-preview::after {
+    content: '';
+    position: absolute;
+    top: -3px;
+    width: 2px;
+    height: 13px;
+    background-color: inherit;
+  }
+
+  .gantt-wrapper .gantt-schedule-drag-preview::before {
+    left: 0;
+  }
+
+  .gantt-wrapper .gantt-schedule-drag-preview::after {
+    right: 0;
+  }
+
+  .gantt-wrapper.gantt-schedule-dragging,
+  .gantt-wrapper.gantt-schedule-dragging * {
+    user-select: none;
+  }
+
+  .gantt-wrapper .gantt-schedule-saving {
+    opacity: 0.65;
+  }
+
   /* highlight-column: 특정 기간(예: 현재 주) 강조 표시 */
   .gantt-wrapper .highlight-column {
     position: absolute; /* gantt-grid 기준 절대 위치 */

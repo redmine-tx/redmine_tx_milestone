@@ -156,7 +156,9 @@
   <div id="<%= gantt_container_id %>"
        class="gantt-container"
        data-gantt-sync="true"
+       data-gantt-start-date="<%= start_date.iso8601 %>"
        data-gantt-start-jd="<%= start_date.jd %>"
+       data-gantt-end-jd="<%= end_date.jd %>"
        data-gantt-cell-width="<%= cell_width %>"
        style='border: 1px solid #ccc;'>
     <div class="gantt-grid" style="grid-template-columns: repeat(<%=total_days+1%>, <%=cell_width%>px);">
@@ -309,6 +311,30 @@
 
             tooltip_begin_date = [ issue_begin_date, line_start_date ].compact.min
             tooltip_end_date = [ issue_end_date, line_end_date ].compact.max
+
+            schedule_start_date = issue.start_date&.to_date
+            schedule_due_date = issue.due_date&.to_date
+            schedule_draggable = schedule_start_date.present? &&
+                                 schedule_due_date.present? &&
+                                 schedule_start_date >= start_date &&
+                                 schedule_due_date <= end_date &&
+                                 !Tracker.is_exception?(issue.tracker_id) &&
+                                 issue.attributes_editable?(User.current) &&
+                                 issue.safe_attribute?('start_date', User.current) &&
+                                 issue.safe_attribute?('due_date', User.current)
+            schedule_update_url = if schedule_draggable
+                                    "/projects/#{issue.project.identifier}/milestone/gantt/issues/#{issue.id}/schedule"
+                                  end
+            schedule_drag_attrs = if schedule_draggable
+                                    [
+                                      'data-gantt-schedule="true"',
+                                      "data-issue-id=\"#{issue.id}\"",
+                                      "data-start-jd=\"#{schedule_start_date.jd}\"",
+                                      "data-due-jd=\"#{schedule_due_date.jd}\"",
+                                      "data-anchor-jd=\"#{schedule_start_date.jd}\"",
+                                      "data-update-url=\"#{h(schedule_update_url)}\""
+                                    ].join(' ').html_safe
+                                  end
           %>
           
           <% (start_date..end_date).each do |date| %>
@@ -380,7 +406,10 @@
                   delayed_schedule_segment = gantt_delayed_schedule_segment(issue, line_start_date, visible_line_end_date)
                 %>
                 <% unless planning_only_line %>
-                  <div class="<%= line_classes.join(' ') %>" style="width: <%=line_width %>px; top: <%= cell_height -3 %>px;" data-issue-tooltip="<%= issue.id %>"></div>
+                  <div class="<%= line_classes.join(' ') %> gantt-schedule-line<%= schedule_draggable ? ' gantt-schedule-editable' : '' %>"
+                       style="width: <%=line_width %>px; top: <%= cell_height -3 %>px;"
+                       data-issue-tooltip="<%= issue.id %>"
+                       <% if schedule_draggable %><%= schedule_drag_attrs %><% end %>></div>
                 <% end %>
                 <% planning_segments.each do |segment| %>
                   <%
@@ -407,6 +436,27 @@
                 <% end %>
                 <% unless has_bar_here %>
                   <div class="task-tooltip-hit" data-issue-tooltip="<%= issue.id %>" style="position: absolute; left: 0; top: 0; width: <%= line_hit_width %>px; height: <%= cell_height %>px; z-index: 50;"></div>
+                <% end %>
+                <% if schedule_draggable %>
+                  <div class="gantt-schedule-draggable gantt-schedule-move-hit"
+                       data-issue-tooltip="<%= issue.id %>"
+                       <%= schedule_drag_attrs %>
+                       data-drag-mode="move"
+                       style="position: absolute; left: 0; top: 0; width: <%= line_width %>px; height: <%= cell_height %>px; z-index: 55;"></div>
+                <% end %>
+                <% if schedule_draggable && line_start_date > start_date %>
+                  <div class="gantt-schedule-draggable gantt-schedule-resize-hit"
+                       data-issue-tooltip="<%= issue.id %>"
+                       <%= schedule_drag_attrs %>
+                       data-drag-mode="start"
+                       style="left: -<%= cell_width %>px; width: <%= cell_width %>px;"></div>
+                <% end %>
+                <% if schedule_draggable && line_end_date < end_date %>
+                  <div class="gantt-schedule-draggable gantt-schedule-resize-hit"
+                       data-issue-tooltip="<%= issue.id %>"
+                       <%= schedule_drag_attrs %>
+                       data-drag-mode="due"
+                       style="left: <%= line_width %>px; width: <%= cell_width %>px;"></div>
                 <% end %>
               <% end %>
 
@@ -484,6 +534,232 @@
       return window.TxMilestoneGanttSyncManager;
     }
 
+    function setupGanttScheduleDrag($wrapper, ganttEl, cellWidth, cellHeight) {
+      if (!ganttEl || ganttEl.getAttribute('data-gantt-schedule-drag-bound') === 'true') {
+        return;
+      }
+
+      ganttEl.setAttribute('data-gantt-schedule-drag-bound', 'true');
+
+      var chartStartJd = parseInt(ganttEl.getAttribute('data-gantt-start-jd'), 10);
+      var chartEndJd = parseInt(ganttEl.getAttribute('data-gantt-end-jd'), 10);
+      var chartStartDate = ganttEl.getAttribute('data-gantt-start-date');
+      var activeDrag = null;
+
+      function csrfToken() {
+        var meta = document.querySelector('meta[name="csrf-token"]');
+        return meta ? meta.getAttribute('content') : '';
+      }
+
+      function clamp(value, min, max) {
+        return Math.max(min, Math.min(value, max));
+      }
+
+      function addDays(isoDate, days) {
+        var parts = isoDate.split('-').map(function(part) { return parseInt(part, 10); });
+        var date = new Date(Date.UTC(parts[0], parts[1] - 1, parts[2]));
+        date.setUTCDate(date.getUTCDate() + days);
+        return date.toISOString().slice(0, 10);
+      }
+
+      function isoFromJd(jd) {
+        return addDays(chartStartDate, jd - chartStartJd);
+      }
+
+      function rangeForDelta(drag, deltaDays) {
+        var durationDays = drag.dueJd - drag.startJd;
+        var nextStartJd = drag.startJd;
+        var nextDueJd = drag.dueJd;
+
+        if (drag.mode === 'start') {
+          nextStartJd = clamp(drag.startJd + deltaDays, chartStartJd, drag.dueJd);
+        } else if (drag.mode === 'due') {
+          nextDueJd = clamp(drag.dueJd + deltaDays, drag.startJd, chartEndJd);
+        } else {
+          nextStartJd = clamp(drag.startJd + deltaDays, chartStartJd, chartEndJd - durationDays);
+          nextDueJd = nextStartJd + durationDays;
+        }
+
+        return {
+          startJd: nextStartJd,
+          dueJd: nextDueJd
+        };
+      }
+
+      function updatePreview(drag, range) {
+        var left = (range.startJd - drag.anchorJd) * cellWidth;
+        var width = (range.dueJd - range.startJd + 1) * cellWidth;
+
+        drag.preview.style.left = left + 'px';
+        drag.preview.style.top = Math.max(cellHeight - 7, 0) + 'px';
+        drag.preview.style.width = width + 'px';
+      }
+
+      function updateScheduleElements(issueId, startJd, dueJd) {
+        var selector = '[data-gantt-schedule="true"][data-issue-id="' + issueId + '"]';
+        var $elements = $wrapper.find(selector);
+
+        $elements.attr('data-start-jd', startJd);
+        $elements.attr('data-due-jd', dueJd);
+
+        $elements.each(function(_, element) {
+          var $element = $(element);
+          var anchorJd = parseInt(element.getAttribute('data-anchor-jd'), 10);
+          var left = (startJd - anchorJd) * cellWidth;
+          var width = (dueJd - startJd + 1) * cellWidth;
+
+          if ($element.hasClass('gantt-schedule-line') || $element.hasClass('gantt-schedule-move-hit')) {
+            element.style.left = left + 'px';
+            element.style.width = width + 'px';
+          } else if (element.getAttribute('data-drag-mode') === 'start') {
+            element.style.left = (left - cellWidth) + 'px';
+            element.style.display = startJd > chartStartJd ? '' : 'none';
+          } else if (element.getAttribute('data-drag-mode') === 'due') {
+            element.style.left = (left + width) + 'px';
+            element.style.display = dueJd < chartEndJd ? '' : 'none';
+          }
+
+          if ($element.hasClass('gantt-schedule-line')) {
+            $element.toggleClass('show-before', startJd >= chartStartJd);
+            $element.toggleClass('show-after', dueJd <= chartEndJd);
+          }
+        });
+      }
+
+      function clearActiveDrag() {
+        if (!activeDrag) {
+          return;
+        }
+
+        if (activeDrag.preview && activeDrag.preview.parentNode) {
+          activeDrag.preview.parentNode.removeChild(activeDrag.preview);
+        }
+
+        $wrapper.removeClass('gantt-schedule-dragging');
+        $(activeDrag.target).removeClass('gantt-schedule-saving');
+        document.removeEventListener('mousemove', onMouseMove);
+        document.removeEventListener('mouseup', onMouseUp);
+        activeDrag = null;
+      }
+
+      function onMouseMove(event) {
+        if (!activeDrag || activeDrag.pending) {
+          return;
+        }
+
+        var deltaDays = Math.round((event.clientX - activeDrag.startClientX) / cellWidth);
+        var range = rangeForDelta(activeDrag, deltaDays);
+        activeDrag.nextStartJd = range.startJd;
+        activeDrag.nextDueJd = range.dueJd;
+        activeDrag.changed = range.startJd !== activeDrag.startJd || range.dueJd !== activeDrag.dueJd;
+        updatePreview(activeDrag, range);
+      }
+
+      function onMouseUp() {
+        if (!activeDrag || activeDrag.pending) {
+          return;
+        }
+
+        var drag = activeDrag;
+        document.removeEventListener('mousemove', onMouseMove);
+        document.removeEventListener('mouseup', onMouseUp);
+
+        if (!drag.changed) {
+          clearActiveDrag();
+          return;
+        }
+
+        drag.pending = true;
+        $(drag.target).addClass('gantt-schedule-saving');
+
+        fetch(drag.updateUrl, {
+          method: 'POST',
+          credentials: 'same-origin',
+          headers: {
+            'Content-Type': 'application/json',
+            'Accept': 'application/json',
+            'X-CSRF-Token': csrfToken()
+          },
+          body: JSON.stringify({
+            start_date: isoFromJd(drag.nextStartJd),
+            due_date: isoFromJd(drag.nextDueJd)
+          })
+        }).then(function(response) {
+          return response.text().then(function(text) {
+            var data = {};
+            try {
+              data = text ? JSON.parse(text) : {};
+            } catch (error) {
+              data = {};
+            }
+
+            if (!response.ok || !data.success) {
+              throw new Error(data.message || '일정 저장에 실패했습니다.');
+            }
+            return data;
+          });
+        }).then(function() {
+          updateScheduleElements(drag.issueId, drag.nextStartJd, drag.nextDueJd);
+          clearActiveDrag();
+        }).catch(function(error) {
+          clearActiveDrag();
+          alert(error.message || '일정 저장에 실패했습니다.');
+        });
+      }
+
+      $wrapper.on('mousedown', '.gantt-schedule-draggable', function(event) {
+        if (activeDrag) {
+          return;
+        }
+
+        if (event.button !== 0) {
+          return;
+        }
+
+        var target = this;
+        var issueId = target.getAttribute('data-issue-id');
+        var startJd = parseInt(target.getAttribute('data-start-jd'), 10);
+        var dueJd = parseInt(target.getAttribute('data-due-jd'), 10);
+        var anchorJd = parseInt(target.getAttribute('data-anchor-jd'), 10);
+        var updateUrl = target.getAttribute('data-update-url');
+        var mode = target.getAttribute('data-drag-mode') || 'move';
+        var sourceCell = $(target).closest('.task-cell')[0];
+
+        if (!issueId || !updateUrl || !sourceCell || isNaN(startJd) || isNaN(dueJd) || isNaN(anchorJd)) {
+          return;
+        }
+
+        event.preventDefault();
+        event.stopPropagation();
+
+        var preview = document.createElement('div');
+        preview.className = 'gantt-schedule-drag-preview mode-' + mode;
+        preview.setAttribute('data-issue-tooltip', issueId);
+        sourceCell.appendChild(preview);
+
+        activeDrag = {
+          target: target,
+          issueId: issueId,
+          mode: mode,
+          startClientX: event.clientX,
+          startJd: startJd,
+          dueJd: dueJd,
+          anchorJd: anchorJd,
+          nextStartJd: startJd,
+          nextDueJd: dueJd,
+          updateUrl: updateUrl,
+          preview: preview,
+          changed: false,
+          pending: false
+        };
+
+        $wrapper.addClass('gantt-schedule-dragging');
+        updatePreview(activeDrag, { startJd: startJd, dueJd: dueJd });
+        document.addEventListener('mousemove', onMouseMove);
+        document.addEventListener('mouseup', onMouseUp);
+      });
+    }
+
     $(document).ready(function() {
       var wrapperId = '<%= gantt_container_id %>';
       var cellWidth = <%= cell_width %>;
@@ -503,6 +779,8 @@
       var $taskNameElements = $wrapper.find('.gantt-info-container .task-name');
       var headerHeight = $taskNameElements.first().outerHeight() || <%= cell_height * 2 %>;
       var wrapperOffsetTop = null;
+
+      setupGanttScheduleDrag($wrapper, ganttEl, cellWidth, cellHeight);
 
       // 행 하이라이트 - 이벤트 위임
       $wrapper.on('mouseenter', '.mouseover-' + wrapperId, function() {

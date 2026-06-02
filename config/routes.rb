@@ -17,6 +17,7 @@ resources :projects do
     collection do
       get 'dashboard', to: 'milestone#dashboard'
       # version_id를 사용한 새로운 라우트 추가
+      post 'gantt/issues/:issue_id/schedule', to: 'milestone#update_issue_schedule'
       get 'gantt/versions/:version_id', to: 'milestone#gantt'
       get 'gantt/issues/:issue_id', to: 'milestone#gantt'
       get 'gantt', to: 'milestone#gantt'
