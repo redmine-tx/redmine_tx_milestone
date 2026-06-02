@@ -3,6 +3,7 @@ module RedmineTxMilestoneHelper
   include TxBaseHelper
 
   REVIEW_VERSION_CUSTOM_FIELD_SETTING = 'setting_milestone_review_version_custom_field_ids'.freeze
+  AUTO_SCHEDULE_PRIORITY_CUSTOM_FIELD_SETTING = 'setting_milestone_auto_schedule_priority_custom_field_id'.freeze
 
   def self.major_issue_tags_plugin_available?
     Redmine::Plugin.respond_to?(:installed?) &&
@@ -43,6 +44,47 @@ module RedmineTxMilestoneHelper
     IssueCustomField.where(field_format: 'version').order(:name).to_a
   rescue StandardError
     []
+  end
+
+  def self.auto_schedule_priority_custom_field_id(settings = Setting.plugin_redmine_tx_milestone)
+    id = settings&.[](AUTO_SCHEDULE_PRIORITY_CUSTOM_FIELD_SETTING).to_s
+    id.present? && id.to_i.positive? ? id.to_i : nil
+  end
+
+  def self.auto_schedule_priority_custom_field(settings = Setting.plugin_redmine_tx_milestone)
+    id = auto_schedule_priority_custom_field_id(settings)
+    return nil unless id
+
+    field = IssueCustomField.find_by(id: id)
+    return nil unless field&.field_format == 'list'
+    return nil if field.multiple?
+
+    field
+  rescue StandardError
+    nil
+  end
+
+  def self.available_auto_schedule_priority_custom_fields
+    return [] unless defined?(IssueCustomField)
+
+    IssueCustomField.where(field_format: 'list').order(:name).to_a.reject(&:multiple?)
+  rescue StandardError
+    []
+  end
+
+  def self.auto_schedule_priority_column_name(settings = Setting.plugin_redmine_tx_milestone)
+    field = auto_schedule_priority_custom_field(settings)
+    field ? :"cf_#{field.id}" : nil
+  end
+
+  def self.auto_schedule_priority_value(issue, custom_field = auto_schedule_priority_custom_field)
+    return 0.0 unless custom_field && issue.respond_to?(:custom_field_value)
+
+    raw_value = Array(issue.custom_field_value(custom_field)).find(&:present?)
+    priority_text = raw_value.to_s.match(/(?<![\d.])-?\d+(?![\d.])/)&.[](0)
+    priority_text ? Integer(priority_text) : 0
+  rescue ArgumentError, TypeError
+    0
   end
 
   def milestone_major_issues(issues)

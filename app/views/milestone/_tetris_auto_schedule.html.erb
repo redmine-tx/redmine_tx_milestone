@@ -177,7 +177,13 @@
 <br>
 
 <h2>자동 배치할 일감: <span style="font-size: 14px; font-weight: normal; color: #666;">(추정시간이 기입되어야 자동 배치가 가능합니다)</span></h2>
-<%= render_issues( l(:label_sc_report_my_issues), @project, @issues_info[:candidate_issues], [:id, :status, :category, :assigned_to, :priority, :subject, :fixed_version, :estimated_hours_plus, :tags_relations] ) %>
+<%
+  auto_schedule_issue_columns = [:id, :status, :category, :assigned_to, :priority, :subject, :fixed_version, :estimated_hours_plus, :tags_relations]
+  if (auto_schedule_priority_column = RedmineTxMilestoneHelper.auto_schedule_priority_column_name)
+    auto_schedule_issue_columns.insert(1, auto_schedule_priority_column)
+  end
+%>
+<%= render_issues( l(:label_sc_report_my_issues), @project, @issues_info[:candidate_issues], auto_schedule_issue_columns ) %>
 <div style="margin-top: 10px; text-align: center;">
   <input type="submit" value="예상 결과 보기" class="button" onclick="autoScheduleIssues()">
 </div>

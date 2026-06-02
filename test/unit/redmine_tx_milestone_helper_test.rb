@@ -19,6 +19,7 @@ class RedmineTxMilestoneHelperTest < ActiveSupport::TestCase
            :enumerations,
            :attachments,
            :workflows,
+           :issue_relations,
            :custom_fields,
            :custom_values,
            :custom_fields_projects,
@@ -71,6 +72,108 @@ class RedmineTxMilestoneHelperTest < ActiveSupport::TestCase
     issues = milestone_major_issues([@issue_1, @issue_2])
 
     assert_equal [@issue_2.id], issues.map(&:id)
+  end
+
+  def test_auto_schedule_priority_custom_field_returns_configured_single_list_field
+    field = IssueCustomField.find(1)
+    Setting.plugin_redmine_tx_milestone = (@original_settings || {}).merge(
+      'setting_milestone_auto_schedule_priority_custom_field_id' => field.id.to_s
+    )
+
+    assert_equal field, RedmineTxMilestoneHelper.auto_schedule_priority_custom_field
+    assert_equal :"cf_#{field.id}", RedmineTxMilestoneHelper.auto_schedule_priority_column_name
+  end
+
+  def test_auto_schedule_priority_custom_field_ignores_non_list_field
+    field = IssueCustomField.find(6)
+    Setting.plugin_redmine_tx_milestone = (@original_settings || {}).merge(
+      'setting_milestone_auto_schedule_priority_custom_field_id' => field.id.to_s
+    )
+
+    assert_nil RedmineTxMilestoneHelper.auto_schedule_priority_custom_field
+    assert_nil RedmineTxMilestoneHelper.auto_schedule_priority_column_name
+  end
+
+  def test_auto_schedule_priority_value_extracts_number_from_label
+    field = IssueCustomField.create!(
+      name: 'Auto schedule priority',
+      field_format: 'list',
+      possible_values: ['매우높음 (2)', '높음 (1)', '보통 (0)', '낮음 (-1)', '매우낮음 (-2)'],
+      is_for_all: true,
+      editable: true
+    )
+    issue = Issue.find(1)
+    CustomValue.create!(
+      customized: issue,
+      custom_field: field,
+      value: '매우낮음 (-2)'
+    )
+
+    assert_equal(-2, RedmineTxMilestoneHelper.auto_schedule_priority_value(issue.reload, field))
+  end
+
+  def test_auto_schedule_priority_value_ignores_decimal_numbers
+    field = IssueCustomField.create!(
+      name: 'Auto schedule priority decimal',
+      field_format: 'list',
+      possible_values: ['높음 1.5'],
+      is_for_all: true,
+      editable: true
+    )
+    issue = Issue.find(1)
+    CustomValue.create!(
+      customized: issue,
+      custom_field: field,
+      value: '높음 1.5'
+    )
+
+    assert_equal(0, RedmineTxMilestoneHelper.auto_schedule_priority_value(issue.reload, field))
+  end
+
+  def test_auto_schedule_priority_custom_field_sorts_before_redmine_priority
+    field = IssueCustomField.create!(
+      name: 'Auto schedule priority',
+      field_format: 'list',
+      possible_values: %w[100 0],
+      is_for_all: true,
+      editable: true
+    )
+    Setting.plugin_redmine_tx_milestone = (@original_settings || {}).merge(
+      'setting_milestone_auto_schedule_priority_custom_field_id' => field.id.to_s
+    )
+
+    lower_redmine_priority_issue = Issue.find(1)
+    higher_redmine_priority_issue = Issue.find(7)
+    [lower_redmine_priority_issue, higher_redmine_priority_issue].each do |issue|
+      issue.update_columns(
+        assigned_to_id: 3,
+        fixed_version_id: nil,
+        start_date: nil,
+        due_date: nil,
+        estimated_hours: 8.0
+      )
+    end
+    CustomValue.create!(
+      customized: lower_redmine_priority_issue,
+      custom_field: field,
+      value: '100'
+    )
+    CustomValue.create!(
+      customized: higher_redmine_priority_issue,
+      custom_field: field,
+      value: '0'
+    )
+
+    result = RedmineTxMilestoneAutoScheduleHelper::AutoScheduler.auto_schedule_issues(
+      [lower_redmine_priority_issue.reload, higher_redmine_priority_issue.reload],
+      [lower_redmine_priority_issue.id, higher_redmine_priority_issue.id],
+      Date.new(2026, 6, 1)
+    )
+
+    assert_equal(
+      [lower_redmine_priority_issue.id, higher_redmine_priority_issue.id],
+      result.sort_by(&:start_date).map(&:id)
+    )
   end
 
   def test_gantt_child_schedule_warning_map_marks_ancestor_when_descendant_is_missing_due_date

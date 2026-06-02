@@ -98,9 +98,12 @@ module RedmineTxMilestoneAutoScheduleHelper
 
           #pp [ 'all_blocked_dates', all_blocked_dates ]
 
-          # 1. priority가 큰 순서부터 정렬 (priority_id가 클수록 높은 우선순위)
+          auto_schedule_priority_custom_field = RedmineTxMilestoneHelper.auto_schedule_priority_custom_field
+
+          # 1. 자동배치 우선순위 커스텀필드, 버전 마감일, priority 순서로 정렬
           priority_sorted_issues = target_issues.sort_by do |issue|
             [
+              -RedmineTxMilestoneHelper.auto_schedule_priority_value(issue, auto_schedule_priority_custom_field),
               (issue.fixed_version&.effective_date || assign_from_date + 10.years),
               -(issue.priority_id || 0),
               issue.id

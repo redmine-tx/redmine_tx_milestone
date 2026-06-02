@@ -7,6 +7,20 @@
     <span class="description">레드마인의 기본 자동 스케줄링 기능(set_issue_to_dates)을 설정에 따라 선택적으로 비활성화합니다. <font color="red" style="font-weight: bold;">이 플러그인의 자체 AutoScheduler 로직과 충돌을 방지하기 위해 사용되므로 특별한 경우가 아니면 체크하지 마세요.</font></span>
   </p>
 
+  <p>
+    <% available_auto_schedule_priority_custom_fields = RedmineTxMilestoneHelper.available_auto_schedule_priority_custom_fields %>
+    <% selected_auto_schedule_priority_custom_field_id = RedmineTxMilestoneHelper.auto_schedule_priority_custom_field_id(@settings) %>
+    <label for="settings_setting_milestone_auto_schedule_priority_custom_field_id">자동배치 우선순위 커스텀필드</label><br>
+    <%= select_tag "settings[setting_milestone_auto_schedule_priority_custom_field_id]",
+                   options_for_select(
+                     [['(사용 안 함)', '']] + available_auto_schedule_priority_custom_fields.map { |field| [field.name, field.id] },
+                     selected_auto_schedule_priority_custom_field_id
+                   ),
+                   id: 'settings_setting_milestone_auto_schedule_priority_custom_field_id',
+                   style: 'min-width: 320px; width: 100%; max-width: 480px;' %>
+    <span class="description">단일 선택 목록(list) 타입 이슈 커스텀필드를 지정합니다. 값에서 정수를 찾아 해석하며 큰 값일수록 먼저 자동배치됩니다. 목록 타입이면 Redmine 기본 우측 컨텍스트 메뉴에서 값을 바로 변경할 수 있습니다.</span>
+  </p>
+
   <% if RedmineTxMilestoneHelper.major_issue_tags_plugin_available? %>
     <% selected_major_issue_tags = RedmineTxMilestoneHelper.major_issue_tag_names(@settings) %>
     <% available_major_issue_tags = (RedmineTxMilestoneHelper.available_major_issue_tags + selected_major_issue_tags).uniq %>
