@@ -44,6 +44,29 @@
 
   <br>
 
+  <h3>일감 상세보기 일정요약 설정</h3>
+  <p>
+    <% selected_issue_detail_schedule_summary_tracker_ids = RedmineTxMilestoneHelper.issue_detail_schedule_summary_tracker_ids(@settings) %>
+    <% available_issue_detail_schedule_summary_trackers = RedmineTxMilestoneHelper.available_issue_detail_schedule_summary_trackers %>
+    <label for="settings_setting_milestone_issue_detail_schedule_summary_tracker_ids">일정요약 간트 표시 일감 유형</label><br>
+    <%= hidden_field_tag "settings[setting_milestone_issue_detail_schedule_summary_tracker_ids][]", "", id: nil %>
+    <%= select_tag "settings[setting_milestone_issue_detail_schedule_summary_tracker_ids][]",
+                   options_from_collection_for_select(
+                     available_issue_detail_schedule_summary_trackers,
+                     :id,
+                     :name,
+                     selected_issue_detail_schedule_summary_tracker_ids
+                   ),
+                   multiple: true,
+                   id: 'settings_setting_milestone_issue_detail_schedule_summary_tracker_ids',
+                   size: [[available_issue_detail_schedule_summary_trackers.size, 4].max, 10].min,
+                   disabled: available_issue_detail_schedule_summary_trackers.blank?,
+                   style: 'min-width: 320px; width: 100%; max-width: 480px;' %>
+    <span class="description">선택한 유형의 일감 상세보기에서 최상위 부모 일감 기준 일정요약 간트차트를 연결된 일감 하단에 표시합니다. 비워두면 표시하지 않습니다.</span>
+  </p>
+
+  <br>
+
   <h3>이관 대기 일감 설정</h3>
   <p>
     <% selected_review_version_custom_field_ids = RedmineTxMilestoneHelper.review_version_custom_field_ids(@settings) %>

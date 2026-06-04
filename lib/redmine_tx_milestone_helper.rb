@@ -4,6 +4,7 @@ module RedmineTxMilestoneHelper
 
   REVIEW_VERSION_CUSTOM_FIELD_SETTING = 'setting_milestone_review_version_custom_field_ids'.freeze
   AUTO_SCHEDULE_PRIORITY_CUSTOM_FIELD_SETTING = 'setting_milestone_auto_schedule_priority_custom_field_id'.freeze
+  ISSUE_DETAIL_SCHEDULE_SUMMARY_TRACKER_SETTING = 'setting_milestone_issue_detail_schedule_summary_tracker_ids'.freeze
 
   def self.major_issue_tags_plugin_available?
     Redmine::Plugin.respond_to?(:installed?) &&
@@ -70,6 +71,32 @@ module RedmineTxMilestoneHelper
     IssueCustomField.where(field_format: 'list').order(:name).to_a.reject(&:multiple?)
   rescue StandardError
     []
+  end
+
+  def self.issue_detail_schedule_summary_tracker_ids(settings = Setting.plugin_redmine_tx_milestone)
+    Array(settings&.[](ISSUE_DETAIL_SCHEDULE_SUMMARY_TRACKER_SETTING))
+      .map(&:to_s)
+      .reject(&:blank?)
+      .map(&:to_i)
+      .select(&:positive?)
+      .uniq
+  end
+
+  def self.available_issue_detail_schedule_summary_trackers
+    return [] unless defined?(Tracker)
+
+    if Tracker.respond_to?(:sorted)
+      Tracker.sorted.to_a
+    else
+      Tracker.order(:position).to_a
+    end
+  rescue StandardError
+    []
+  end
+
+  def self.issue_detail_schedule_summary_enabled?(issue, settings = Setting.plugin_redmine_tx_milestone)
+    tracker_ids = issue_detail_schedule_summary_tracker_ids(settings)
+    issue.present? && tracker_ids.include?(issue.tracker_id.to_i)
   end
 
   def self.auto_schedule_priority_column_name(settings = Setting.plugin_redmine_tx_milestone)
@@ -760,6 +787,23 @@ module RedmineTxMilestoneHelper
                   :gantt_prepare_issues
 
   class RedmineTxMilestoneHook < Redmine::Hook::ViewListener
+    def view_issues_show_description_bottom(context = {})
+      issue = context[:issue]
+      return ''.html_safe unless RedmineTxMilestoneHelper.issue_detail_schedule_summary_enabled?(issue)
+      return ''.html_safe unless User.current.allowed_to?(:view_milestone, issue.root.project)
+
+      view = context[:controller]&.view_context
+      return ''.html_safe unless view
+
+      view.render(
+        partial: 'issues/tx_milestone_schedule_summary',
+        locals: { issue: issue }
+      )
+    rescue StandardError => e
+      Rails.logger.error "[RedmineTxMilestone] issue detail schedule summary render failed: #{e.message}\n#{Array(e.backtrace).first(5).join("\n")}"
+      ''.html_safe
+    end
+
     # 이슈 페이지 action menu에 로드맵 및 일정요약 링크 추가
     def view_issues_show_details_bottom(context = {})
       issue = context[:issue]

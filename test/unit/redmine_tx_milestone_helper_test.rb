@@ -94,6 +94,31 @@ class RedmineTxMilestoneHelperTest < ActiveSupport::TestCase
     assert_nil RedmineTxMilestoneHelper.auto_schedule_priority_column_name
   end
 
+  def test_issue_detail_schedule_summary_tracker_ids_removes_blank_and_duplicate_values
+    settings = {
+      'setting_milestone_issue_detail_schedule_summary_tracker_ids' => ['', '1', '1', '2', 'invalid']
+    }
+
+    assert_equal [1, 2], RedmineTxMilestoneHelper.issue_detail_schedule_summary_tracker_ids(settings)
+  end
+
+  def test_issue_detail_schedule_summary_enabled_for_configured_current_issue_tracker
+    Setting.plugin_redmine_tx_milestone = (@original_settings || {}).merge(
+      'setting_milestone_issue_detail_schedule_summary_tracker_ids' => [@issue_1.tracker_id.to_s]
+    )
+
+    assert RedmineTxMilestoneHelper.issue_detail_schedule_summary_enabled?(@issue_1)
+  end
+
+  def test_issue_detail_schedule_summary_disabled_when_current_issue_tracker_is_not_configured
+    unconfigured_tracker_id = Tracker.maximum(:id).to_i + 1
+    Setting.plugin_redmine_tx_milestone = (@original_settings || {}).merge(
+      'setting_milestone_issue_detail_schedule_summary_tracker_ids' => [unconfigured_tracker_id.to_s]
+    )
+
+    assert_not RedmineTxMilestoneHelper.issue_detail_schedule_summary_enabled?(@issue_1)
+  end
+
   def test_auto_schedule_priority_value_extracts_number_from_label
     field = IssueCustomField.create!(
       name: 'Auto schedule priority',

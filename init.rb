@@ -31,6 +31,7 @@ Redmine::Plugin.register :redmine_tx_milestone do
     ],
     'setting_milestone_dev_complete_index' => '0',
     'setting_milestone_major_issue_tags' => [],
+    'setting_milestone_issue_detail_schedule_summary_tracker_ids' => [],
     'setting_milestone_review_version_custom_field_ids' => [],
     'setting_milestone_auto_schedule_priority_custom_field_id' => '',
     'setting_milestone_use_redmine_auto_schedule' => 'false',
@@ -45,6 +46,7 @@ Rails.application.config.after_initialize do
   require_dependency File.expand_path('../lib/redmine_tx_milestone/settings_migration', __FILE__)
   require_dependency File.expand_path('../lib/redmine_tx_milestone/issue_due_date_sync_service', __FILE__)
   require_dependency File.expand_path('../lib/redmine_tx_milestone/issue_schedule_write_service', __FILE__)
+  require_dependency File.expand_path('../lib/redmine_tx_milestone/issue_detail_schedule_summary', __FILE__)
   require_dependency File.expand_path('../lib/redmine_tx_milestone/summary_service', __FILE__)
   require_dependency File.expand_path('../lib/redmine_tx_milestone_helper', __FILE__)
 
