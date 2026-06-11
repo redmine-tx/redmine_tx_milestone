@@ -8,6 +8,11 @@ class MilestoneController < ApplicationController
   helper :queries
   helper :sort
   helper :redmine_tx_milestone
+  helper_method :schedule_summary_cookie_key,
+                :schedule_summary_mode,
+                :schedule_summary_group_ids,
+                :schedule_summary_all_groups,
+                :schedule_summary_groups_to_show
 
   menu_item :redmine_tx_milestone
     
@@ -383,7 +388,9 @@ class MilestoneController < ApplicationController
           unless Setting.plugin_redmine_tx_milestone['enable_ai_summary_schedule'] == 'true'
             return render json: { success: false, error: '일정요약 AI 요약 기능이 비활성화되어 있습니다. 플러그인 설정에서 활성화해 주세요.' }
           end
-          return render json: { success: false, error: '일감 ID가 필요합니다.' } unless params[:issue_ids].present?
+          if schedule_summary_mode == 'issue' && params[:issue_ids].blank?
+            return render json: { success: false, error: '일감 ID가 필요합니다.' }
+          end
           data = compute_schedule_summary_data
           prompt = build_schedule_summary_ai_prompt(data)
         else
@@ -953,18 +960,75 @@ class MilestoneController < ApplicationController
 
     # --- schedule_summary_ai helpers ---
 
+    def schedule_summary_cookie_key(name)
+      "rtx_ms_schedule_summary_#{@project.id}_#{User.current.id}_#{name}"
+    end
+
+    def schedule_summary_mode
+      raw_mode = if params[:summary_mode].present?
+                   params[:summary_mode]
+                 elsif params[:issue_ids].present?
+                   'issue'
+                 else
+                   cookies[schedule_summary_cookie_key('mode')].presence
+                 end
+      %w[issue team].include?(raw_mode) ? raw_mode : 'issue'
+    end
+
+    def schedule_summary_group_ids
+      raw_values =
+        if params.key?(:group_ids) || params.key?('group_ids')
+          params[:group_ids]
+        else
+          cookies[schedule_summary_cookie_key('group_ids')].to_s.split(',')
+        end
+
+      Array(raw_values)
+        .flat_map { |value| value.to_s.split(',') }
+        .map(&:strip)
+        .reject(&:blank?)
+        .map(&:to_i)
+        .reject(&:zero?)
+        .uniq
+    end
+
+    def schedule_summary_all_groups
+      @schedule_summary_all_groups ||= begin
+        excluded_group_ids = Array(TxBaseHelper.config_arr('e_group')).map(&:to_i)
+        Group.all.reject { |group| excluded_group_ids.include?(group.id) }.sort_by(&:name)
+      end
+    end
+
+    def schedule_summary_groups_to_show
+      selected_group_ids = schedule_summary_group_ids
+      return schedule_summary_all_groups if selected_group_ids.blank?
+
+      schedule_summary_all_groups.select { |group| selected_group_ids.include?(group.id) }
+    end
+
     def compute_schedule_summary_data
       today = Date.today
+      display_start_date = params[:display_start_date].present? ? Date.parse(params[:display_start_date]) : 2.months.ago.to_date
+      mode = schedule_summary_mode
 
-      # 일감 ID 파싱 → 부모 일감 → 하위 일감 (ERB 로직 재현)
-      input_issue_ids = params[:issue_ids].to_s.split(/[,;\s]+/).map(&:strip).reject(&:empty?).map(&:to_i).uniq
-      input_issues = Issue.where(id: input_issue_ids)
-      parent_issues = input_issues.map(&:root).uniq
+      groups_to_show = schedule_summary_groups_to_show
+      selected_user_ids = groups_to_show.flat_map { |group| group.users.pluck(:id) }.uniq
 
-      all_issue_ids = Set.new(input_issue_ids)
-      parent_issues.each { |i| all_issue_ids.merge(i.descendants.pluck(:id)) }
+      if mode == 'team'
+        input_issue_ids = []
+        all_issues = selected_user_ids.any? ? Issue.visible.where(assigned_to_id: selected_user_ids) : Issue.none
+        parent_issues = []
+      else
+        # 일감 ID 파싱 → 부모 일감 → 하위 일감 (ERB 로직 재현)
+        input_issue_ids = params[:issue_ids].to_s.split(/[,;\s]+/).map(&:strip).reject(&:empty?).map(&:to_i).uniq
+        input_issues = Issue.where(id: input_issue_ids)
+        parent_issues = input_issues.map(&:root).uniq { |issue| issue.id }
 
-      all_issues = Issue.where(id: all_issue_ids.to_a)
+        all_issue_ids = Set.new(input_issue_ids)
+        parent_issues.each { |i| all_issue_ids.merge(i.descendants.pluck(:id)) }
+
+        all_issues = Issue.where(id: all_issue_ids.to_a)
+      end
 
       # tracker/status 필터 (ERB와 동일)
       excluded_tracker_ids = (Tracker.bug_trackers_ids +
@@ -974,6 +1038,16 @@ class MilestoneController < ApplicationController
       filtered_all = all_issues.where.not(tracker_id: excluded_tracker_ids)
                                .where.not(status_id: IssueStatus.discarded_ids)
       filtered = filtered_all.where.not(start_date: nil).where.not(due_date: nil)
+                             .where('start_date >= ? OR due_date >= ?', display_start_date, display_start_date)
+
+      if mode == 'team'
+        top_issue_by_id = {}
+        filtered.each do |issue|
+          root_issue = issue.root
+          top_issue_by_id[root_issue.id] ||= root_issue
+        end
+        parent_issues = top_issue_by_id.values
+      end
 
       # 1. parent_issues
       pi_data = parent_issues.map { |i| { id: i.id, subject: i.subject } }
@@ -1063,6 +1137,9 @@ class MilestoneController < ApplicationController
       missing_schedule = { count: missing_list.size, list: missing_list.first(20) }
 
       {
+        mode: mode,
+        selected_groups: groups_to_show.map(&:name),
+        selected_user_count: selected_user_ids.size,
         parent_issues: pi_data,
         holidays: holidays_data,
         empty_days_by_user: empty_days_by_user,
@@ -1079,6 +1156,13 @@ class MilestoneController < ApplicationController
       today = Date.today
       lines = []
       lines << "오늘: #{today}"
+      if data[:mode] == 'team'
+        lines << "요약 기준: 팀 기준"
+        lines << "선택 팀: #{data[:selected_groups].join(', ')}"
+        lines << "대상 구성원: #{data[:selected_user_count]}명"
+      else
+        lines << "요약 기준: 일감 ID 기준"
+      end
       lines << "연관 일감: #{data[:parent_issues].map { |i| "##{i[:id]} #{i[:subject]}" }.join(', ')}"
       lines << "전체 구현 일감: #{data[:total_filtered]}건, 일정 배정 완료: #{data[:total_with_schedule]}건"
 

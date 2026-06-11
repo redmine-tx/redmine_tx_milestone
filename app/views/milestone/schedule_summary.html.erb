@@ -22,6 +22,15 @@
       border-radius: 4px;
       margin-bottom: 20px;
     }
+    .schedule-summary-mode-tabs {
+      margin-bottom: 15px;
+    }
+    .schedule-summary-mode-tabs ul {
+      margin: 0;
+    }
+    .schedule-summary-mode-tabs a {
+      cursor: pointer;
+    }
     .schedule-summary-form label {
       display: block;
       font-weight: bold;
@@ -214,33 +223,50 @@
 
 <%
 # 팀(그룹) 목록 로드
-excluded_group_ids = TxBaseHelper.config_arr('e_group') || []
-all_groups = Group.all.reject { |group| excluded_group_ids.include?(group.id) }
+all_groups = schedule_summary_all_groups
+summary_mode = schedule_summary_mode
+selected_group_ids = schedule_summary_group_ids
+groups_to_show = schedule_summary_groups_to_show
+group_user_mapping = {}
+groups_to_show.each do |group|
+  group_user_mapping[group] = group.users.pluck(:id)
+end
+selected_team_user_ids = group_user_mapping.values.flatten.uniq
+has_explicit_group_param = params.key?(:group_ids) || params.key?('group_ids')
+result_data = nil
+summary_requested = if summary_mode == 'team'
+  params[:summary_mode] == 'team' || has_explicit_group_param || selected_group_ids.any?
+else
+  params[:issue_ids].present?
+end
 %>
 
-<% if params[:issue_ids].present? %>
+<% if summary_requested %>
   <%
   # 표기 시작일 파싱
-  default_display_start_date = 6.months.ago.to_date
+  default_display_start_date = 2.months.ago.to_date
   display_start_date = params[:display_start_date].present? ? Date.parse(params[:display_start_date]) : default_display_start_date
-  
-  # 일감 ID 파싱 (쉼표, 세미콜론, 공백으로 분리)
-  input_issue_ids = params[:issue_ids].to_s.split(/[,;\s]+/).map(&:strip).reject(&:empty?).map(&:to_i).uniq
-  
-  # 입력된 일감들과 연관된 일감들 조회
-  input_issues = Issue.where(id: input_issue_ids)
-  parent_issues = input_issues.map(&:root).uniq
 
-  # 버전별 마커 수집
-  versions = parent_issues.map(&:fixed_version).uniq.select { |v| v.effective_date.present? }.sort_by(&:effective_date)
-  version_markers = []
-  versions.each do |version|
-    version.marks.each do |mark|
-      mark_color = mark[:is_deadline] ? '#cc0000' : '#9999ff'
-      mark_line_style = mark[:is_deadline] ? 'solid' : 'dashed'
-      version_markers << { date: mark[:date], name: mark[:name], color: mark_color, side: 'right', lineStyle: mark_line_style }
+  if summary_mode == 'team'
+    input_issue_ids = []
+    all_issues = selected_team_user_ids.any? ? Issue.visible.where(assigned_to_id: selected_team_user_ids) : Issue.none
+    parent_issues = []
+  else
+    # 일감 ID 파싱 (쉼표, 세미콜론, 공백으로 분리)
+    input_issue_ids = params[:issue_ids].to_s.split(/[,;\s]+/).map(&:strip).reject(&:empty?).map(&:to_i).uniq
+
+    # 입력된 일감들과 연관된 일감들 조회
+    input_issues = Issue.where(id: input_issue_ids)
+    parent_issues = input_issues.map(&:root).uniq
+
+    # 모든 하위 일감 포함 (descendants)
+    all_issue_ids = Set.new(input_issue_ids)
+    parent_issues.each do |issue|
+      all_issue_ids.merge(issue.descendants.pluck(:id))
     end
-    version_markers << { date: version.effective_date, name: version.name, color: '#5555cc', side: 'right' }
+
+    # 전체 일감 조회
+    all_issues = Issue.where(id: all_issue_ids.to_a)
   end
 
   # 메인 일감별 색상 팔레트 정의
@@ -249,32 +275,6 @@ all_groups = Group.all.reject { |group| excluded_group_ids.include?(group.id) }
     '#70D8BE', '#F09897', '#8FBFEA', '#F9CC85', '#78D9A8',
     '#F9C980', '#B880C3', '#6BC2B0', '#E08080', '#70D095'
   ]
-  
-  # 메인 일감(입력된 일감)마다 색상 할당
-  main_issue_colors = {}
-  parent_issues.each_with_index do |issue, idx|
-    main_issue_colors[issue.id] = color_palette[idx % color_palette.length]
-  end
-  
-  # 각 일감이 어떤 메인 일감에 속하는지 매핑 (일감 ID -> 메인 일감 ID)
-  issue_to_main_issue = {}
-  parent_issues.each do |main_issue|
-    # 메인 일감 자신
-    issue_to_main_issue[main_issue.id] = main_issue.id
-    # 하위 일감들
-    main_issue.descendants.each do |descendant|
-      issue_to_main_issue[descendant.id] = main_issue.id
-    end
-  end
-  
-  # 모든 하위 일감 포함 (descendants)
-  all_issue_ids = Set.new(input_issue_ids)
-  parent_issues.each do |issue|
-    all_issue_ids.merge(issue.descendants.pluck(:id))
-  end
-  
-  # 전체 일감 조회
-  all_issues = Issue.where(id: all_issue_ids.to_a)
   
   # 시작일과 완료일이 모두 있는 일감만 필터링
   filtered_issues = all_issues.where.not(start_date: nil)
@@ -299,6 +299,53 @@ all_groups = Group.all.reject { |group| excluded_group_ids.include?(group.id) }
 
   filtered_issues = filtered_issues.where.not(tracker_id: excluded_tracker_ids)
 
+  if summary_mode == 'team'
+    top_issue_by_id = {}
+    filtered_issues.each do |issue|
+      root_issue = issue.root
+      top_issue_by_id[root_issue.id] ||= root_issue
+    end
+    parent_issues = top_issue_by_id.values.sort_by(&:id)
+  else
+    parent_issues = parent_issues.uniq { |issue| issue.id }
+  end
+  legend_issues = parent_issues
+
+  # 버전별 마커 수집
+  versions = parent_issues.map(&:fixed_version).compact.uniq.select { |v| v.effective_date.present? }.sort_by(&:effective_date)
+  version_markers = []
+  versions.each do |version|
+    version.marks.each do |mark|
+      mark_color = mark[:is_deadline] ? '#cc0000' : '#9999ff'
+      mark_line_style = mark[:is_deadline] ? 'solid' : 'dashed'
+      version_markers << { date: mark[:date], name: mark[:name], color: mark_color, side: 'right', lineStyle: mark_line_style }
+    end
+    version_markers << { date: version.effective_date, name: version.name, color: '#5555cc', side: 'right' }
+  end
+
+  # 메인 일감(입력된 일감 또는 팀 일정의 루트 일감)마다 색상 할당
+  main_issue_colors = {}
+  legend_issues.each_with_index do |issue, idx|
+    main_issue_colors[issue.id] = color_palette[idx % color_palette.length]
+  end
+
+  # 각 일감이 어떤 메인 일감에 속하는지 매핑 (일감 ID -> 메인 일감 ID)
+  issue_to_main_issue = {}
+  if summary_mode == 'team'
+    filtered_issues.each do |issue|
+      issue_to_main_issue[issue.id] = issue.root.id
+    end
+  else
+    parent_issues.each do |main_issue|
+      # 메인 일감 자신
+      issue_to_main_issue[main_issue.id] = main_issue.id
+      # 하위 일감들
+      main_issue.descendants.each do |descendant|
+        issue_to_main_issue[descendant.id] = main_issue.id
+      end
+    end
+  end
+
   # 공휴일 데이터 수집 (타임라인 표시 범위)
   # 타임라인 시작일: display_start_date, 종료일: 필터링된 일감들의 최대 완료일 + 여유(60일)
   timeline_start_date = display_start_date
@@ -319,28 +366,12 @@ all_groups = Group.all.reject { |group| excluded_group_ids.include?(group.id) }
   filtered_all_issues = all_issues.where.not(tracker_id: excluded_tracker_ids)
                                   .where.not(status_id: IssueStatus.discarded_ids)
   
-  # 선택된 그룹 필터
-  selected_group_ids = params[:group_ids]&.map(&:to_i)&.reject { |id| id == 0 } || []
-  
-  # 그룹 정보 로드
-  if selected_group_ids.any?
-    groups_to_show = Group.where(id: selected_group_ids)
-  else
-    groups_to_show = all_groups
-  end
-  
   # 사용자별 일감 그룹핑 (담당자가 있고 일정이 있는 것만)
   issues_by_user = filtered_issues.where.not(assigned_to_id: nil).group_by(&:assigned_to_id)
   
   # 사용자 정보 미리 로드
   user_ids = issues_by_user.keys.compact
   users = User.where(id: user_ids).index_by(&:id)
-  
-  # 그룹별 사용자 매핑
-  group_user_mapping = {}
-  groups_to_show.each do |group|
-    group_user_mapping[group] = group.users.pluck(:id)
-  end
   
   # 결과 데이터 구성: 그룹 -> 사용자 -> 일감들
   result_data = {}
@@ -528,14 +559,21 @@ all_groups = Group.all.reject { |group| excluded_group_ids.include?(group.id) }
     <% end %>
 
     <p style="color: #888; font-size: 0.9em; margin-top: 16px;">
-      입력된 일감: <strong><%= input_issue_ids.size %>개</strong> |
-      전체 일감 (하위 포함, 실제 구현 일감만): <strong><%= filtered_all_issues.size %>개</strong> |
-      요약된 일감 (담당자/일정 있음): <strong><%= filtered_issues.where.not(assigned_to_id: nil).size %>개</strong>
+      <% if summary_mode == 'team' %>
+        선택된 팀: <strong><%= selected_group_ids.any? ? groups_to_show.size : all_groups.size %>개</strong> |
+        구성원: <strong><%= selected_team_user_ids.size %>명</strong> |
+        전체 일감 (실제 구현 일감만): <strong><%= filtered_all_issues.size %>개</strong> |
+        요약된 일감 (일정 있음): <strong><%= filtered_issues.where.not(assigned_to_id: nil).size %>개</strong>
+      <% else %>
+        입력된 일감: <strong><%= input_issue_ids.size %>개</strong> |
+        전체 일감 (하위 포함, 실제 구현 일감만): <strong><%= filtered_all_issues.size %>개</strong> |
+        요약된 일감 (담당자/일정 있음): <strong><%= filtered_issues.where.not(assigned_to_id: nil).size %>개</strong>
+      <% end %>
     </p>
   </div>
 <% end %>
 
-<% if params[:issue_ids].present? && result_data.any? %>
+<% if summary_requested && result_data && result_data.any? %>
 <script>
 $(document).ready(function() {
   /**
@@ -943,7 +981,7 @@ $(document).ready(function() {
   
   // 범례 정보 추가 (메인 일감별 색상)
   <% if main_issue_colors.any? %>
-    <% parent_issues.each do |main_issue| %>
+    <% legend_issues.each do |main_issue| %>
       jsonData.legends.push({
         title: "<%= j("##{main_issue.id} : #{main_issue.subject.truncate(30)}") %>",
         color: "<%= main_issue_colors[main_issue.id] %>",
@@ -1041,16 +1079,24 @@ $(document).ready(function() {
 <br>
 
 <h2>📋 일정요약</h2>
-<p>일감들을 팀과 사용자 기준으로 요약합니다. 입력된 일감의 하위 일감 중 시작일과 완료일이 모두 기재된 일감만 취합됩니다.</p>
+<p>일감 ID 기준은 입력한 일감의 하위 일정을, 팀 기준은 선택한 팀 구성원의 전체 일정을 사용자별로 요약합니다.</p>
 
 <div class="schedule-summary-form" style="margin-top: 30px;">
   <%= form_tag(request.path, method: :get, id: 'schedule-summary-form') do %>
+    <div class="tabs tabs-wrap schedule-summary-mode-tabs">
+      <ul>
+        <li><a href="#" class="schedule-summary-mode-tab <%= 'selected' if summary_mode == 'issue' %>" data-mode="issue">일감 ID 기준</a></li>
+        <li><a href="#" class="schedule-summary-mode-tab <%= 'selected' if summary_mode == 'team' %>" data-mode="team">팀 기준</a></li>
+      </ul>
+    </div>
+
+    <input type="hidden" name="summary_mode" id="summary_mode" value="<%= summary_mode %>">
 
     <div style="display: flex; gap: 20px; margin-bottom: 20px;">
       <!-- 왼쪽 컬럼: 일감 목록 + 표기 시작일 -->
       <div style="flex: 1;">
-        <div class="form-group">
-          <label for="issue_ids">일감 목록 (ID - 제목을 입력하면 ID가 자동 완성 됩니다.</label>
+        <div class="form-group" id="issue-summary-fields" style="<%= 'display: none;' if summary_mode == 'team' %>">
+          <label for="issue_ids">일감 목록 (ID - 제목을 입력하면 ID가 자동 완성 됩니다.)</label>
           <textarea name="issue_ids" id="issue_ids" placeholder="예: 12312, 32123; 42128 35123"><%= params[:issue_ids] %></textarea>
           <div class="hint">쉼표(,), 세미콜론(;), 공백으로 구분하여 여러 일감 ID를 입력하세요. 번호나 제목을 입력하면 자동완성으로 검색됩니다. 검색 대상은 최상위 부모 일감만 포함됩니다.</div>
         </div>
@@ -1073,17 +1119,17 @@ $(document).ready(function() {
           <label for="group_ids">팀 선택 (다중 선택 가능)</label>
           <select name="group_ids[]" id="group_ids" multiple style="min-height: 150px;">
             <% all_groups.each do |group| %>
-              <option value="<%= group.id %>" <%= 'selected' if params[:group_ids]&.include?(group.id.to_s) %>><%= group.name %></option>
+              <option value="<%= group.id %>" <%= 'selected' if selected_group_ids.include?(group.id) %>><%= group.name %></option>
             <% end %>
           </select>
-          <div class="hint">팀을 선택하지 않으면 전체 팀 기준으로 요약됩니다. Ctrl/Cmd 키를 누르고 클릭하여 여러 팀을 선택할 수 있습니다.</div>
+          <div class="hint">팀을 선택하지 않으면 전체 팀 기준으로 요약됩니다. 일감 ID 기준에서는 선택 팀만 필터링합니다. Ctrl/Cmd 키를 누르고 클릭하여 여러 팀을 선택할 수 있습니다.</div>
         </div>
       </div>
     </div>
 
     <div class="form-group">
       <%= submit_tag '📊 요약', class: 'btn btn-primary' %>
-      <% if params[:issue_ids].present? %>
+      <% if result_data && result_data.any? %>
         <button type="button" id="export-xlsx-btn" class="btn btn-success" style="margin-left: 10px;">📊 XLSX</button>
       <% end %>
     </div>
@@ -1103,4 +1149,105 @@ $(document).ready(function() {
       <% end %>
     }
   );
+
+  (function() {
+    var storageKeyBase = 'redmine_tx_milestone.schedule_summary.project.<%= j @project.id.to_s %>.user.<%= j User.current.id.to_s %>';
+    var modeStorageKey = storageKeyBase + '.mode';
+    var groupStorageKey = storageKeyBase + '.group_ids';
+    var modeCookieName = '<%= j schedule_summary_cookie_key('mode') %>';
+    var groupCookieName = '<%= j schedule_summary_cookie_key('group_ids') %>';
+    var hasModeParam = <%= params[:summary_mode].present? ? 'true' : 'false' %>;
+    var hasGroupParam = <%= has_explicit_group_param ? 'true' : 'false' %>;
+    var hasServerSummary = <%= summary_requested ? 'true' : 'false' %>;
+
+    var $modeInput = $('#summary_mode');
+    var $issueFields = $('#issue-summary-fields');
+    var $issueInput = $('#issue_ids');
+    var $groupSelect = $('#group_ids');
+
+    function setCookie(name, value) {
+      document.cookie = name + '=' + (value || '') + '; path=/; max-age=31536000; SameSite=Lax';
+    }
+
+    function setStoredValue(key, value) {
+      try {
+        window.localStorage.setItem(key, value);
+      } catch (e) {
+        // localStorage를 사용할 수 없는 브라우저에서는 쿠키만 사용합니다.
+      }
+    }
+
+    function getStoredValue(key) {
+      try {
+        return window.localStorage.getItem(key);
+      } catch (e) {
+        return null;
+      }
+    }
+
+    function selectedGroupIds() {
+      return $groupSelect.val() || [];
+    }
+
+    function persistMode(mode) {
+      setStoredValue(modeStorageKey, mode);
+      setCookie(modeCookieName, mode);
+    }
+
+    function persistGroups() {
+      var groupIds = selectedGroupIds().join(',');
+      setStoredValue(groupStorageKey, groupIds);
+      setCookie(groupCookieName, groupIds);
+    }
+
+    function applyMode(mode) {
+      var normalizedMode = mode === 'team' ? 'team' : 'issue';
+      $modeInput.val(normalizedMode);
+      $('.schedule-summary-mode-tab').removeClass('selected');
+      $('.schedule-summary-mode-tab[data-mode="' + normalizedMode + '"]').addClass('selected');
+
+      if (normalizedMode === 'team') {
+        $issueFields.hide();
+        $issueInput.prop('disabled', true);
+      } else {
+        $issueInput.prop('disabled', false);
+        $issueFields.show();
+      }
+    }
+
+    if (!hasModeParam && !hasServerSummary) {
+      var storedMode = getStoredValue(modeStorageKey);
+      if (storedMode === 'issue' || storedMode === 'team') {
+        applyMode(storedMode);
+        persistMode(storedMode);
+      }
+    } else {
+      applyMode($modeInput.val());
+      persistMode($modeInput.val());
+    }
+
+    if (!hasGroupParam && !hasServerSummary) {
+      var storedGroups = getStoredValue(groupStorageKey);
+      if (storedGroups !== null) {
+        $groupSelect.val(storedGroups.length ? storedGroups.split(',') : []);
+      }
+    }
+    persistGroups();
+
+    $('.schedule-summary-mode-tab').on('click', function(event) {
+      event.preventDefault();
+      var mode = $(this).data('mode') === 'team' ? 'team' : 'issue';
+      applyMode(mode);
+      persistMode(mode);
+    });
+
+    $groupSelect.on('change', function() {
+      persistGroups();
+    });
+
+    $('#schedule-summary-form').on('submit', function() {
+      persistMode($modeInput.val());
+      persistGroups();
+    });
+  })();
 <% end %>
