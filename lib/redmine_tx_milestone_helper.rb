@@ -132,7 +132,8 @@ module RedmineTxMilestoneHelper
     custom_field_ids = RedmineTxMilestoneHelper.review_version_custom_field_ids
     return [] if version.blank? || custom_field_ids.blank?
 
-    Issue.joins(:custom_values)
+    Issue.visible
+         .joins(:custom_values)
          .where(tracker_id: Tracker.roadmap_trackers_ids)
          .where.not(status_id: IssueStatus.discarded_ids)
          .where(custom_values: { custom_field_id: custom_field_ids, value: version.id.to_s })
@@ -451,28 +452,31 @@ module RedmineTxMilestoneHelper
   end
 
   # 표시 중인 최상위 부모 이슈별로 자식 예정일 초과분 계산
-  def gantt_top_level_overrun_due_dates(issues)
+  def gantt_top_level_overrun_due_dates(issues, descendant_issues = nil)
     return {} if issues.blank?
 
     displayed_issue_ids = {}
     issues.each { |issue| displayed_issue_ids[issue.id] = true }
+
+    descendant_issues ||= gantt_all_descendants_for(issues)
+    descendants_by_ancestor_id = Array(descendant_issues).group_by(&:ancestor_id)
+    discarded_status_ids = Array(IssueStatus.discarded_ids)
 
     issues.each_with_object({}) do |issue, overrun_due_dates|
       next if displayed_issue_ids[issue.parent_id]
       next unless issue.due_date.present?
       next if issue.leaf?
 
-      max_due_date = issue.descendants.visible
-                          .select(:id, :due_date, :tracker_id, :status_id)
-                          .where.not(due_date: nil)
-                          .where.not(status_id: IssueStatus.discarded_ids)
-                          .reject { |child|
-                            Tracker.is_exception?(child.tracker_id) ||
-                              Tracker.is_bug?(child.tracker_id) ||
-                              Tracker.is_sidejob?(child.tracker_id)
-                          }
-                          .map(&:due_date)
-                          .max
+      max_due_date = Array(descendants_by_ancestor_id[issue.id])
+                       .reject { |child|
+                         child.due_date.nil? ||
+                           discarded_status_ids.include?(child.status_id) ||
+                           Tracker.is_exception?(child.tracker_id) ||
+                           Tracker.is_bug?(child.tracker_id) ||
+                           Tracker.is_sidejob?(child.tracker_id)
+                       }
+                       .map(&:due_date)
+                       .max
 
       overrun_due_dates[issue.id] = max_due_date if max_due_date && max_due_date > issue.due_date
     end
@@ -601,20 +605,21 @@ module RedmineTxMilestoneHelper
   end
 
   def gantt_parent_planning_segments_map(issues, descendant_issues = nil)
-    displayed_issue_ids = Array(issues).map(&:id).compact
+    issue_list = Array(issues)
+    displayed_issue_ids = issue_list.map(&:id).compact
     return {} if displayed_issue_ids.empty?
 
     descendant_issues ||= gantt_visible_descendants_for(issues)
+    displayed_issue_id_set = displayed_issue_ids.to_set
+    issues_by_id = issue_list.index_by(&:id)
+    descendants_by_ancestor_id = Array(descendant_issues).group_by do |descendant|
+      descendant.respond_to?(:ancestor_id) ? descendant.ancestor_id : descendant.parent_id
+    end
 
     displayed_issue_ids.each_with_object({}) do |issue_id, segments_map|
-      next if displayed_issue_ids.include?(issues.find { |issue| issue.id == issue_id }&.parent_id)
+      next if displayed_issue_id_set.include?(issues_by_id[issue_id]&.parent_id)
 
-      issue_descendants = Array(descendant_issues).select do |descendant|
-        descendant_ancestor_id = descendant.respond_to?(:ancestor_id) ? descendant.ancestor_id : descendant.parent_id
-        descendant_ancestor_id == issue_id
-      end
-
-      segments = issue_descendants.filter_map do |descendant|
+      segments = Array(descendants_by_ancestor_id[issue_id]).filter_map do |descendant|
         next unless Tracker.respond_to?(:is_planning?) && Tracker.is_planning?(descendant.tracker_id)
 
         segment_start = descendant.start_date || descendant.due_date
@@ -659,7 +664,36 @@ module RedmineTxMilestoneHelper
     }
   end
 
-  def gantt_visible_descendants_for(issues)
+  # 표시 중인 이슈들의 모든 하위 일감을 (descendant, ancestor) 쌍으로 단일 쿼리 조회.
+  # 간트 차트의 overrun/planning/warning 계산이 이 결과 하나를 공유한다.
+  def gantt_all_descendants_for(issues)
+    displayed_issue_ids = Array(issues).map(&:id).compact
+    return [] if displayed_issue_ids.empty?
+    return [] unless Array(issues).all? { |issue| issue.is_a?(Issue) }
+
+    Issue.visible
+         .joins(
+           "JOIN #{Issue.table_name} ancestors" \
+           " ON ancestors.root_id = #{Issue.table_name}.root_id" \
+           " AND ancestors.lft <= #{Issue.table_name}.lft" \
+           " AND ancestors.rgt >= #{Issue.table_name}.rgt"
+         )
+         .where(ancestors: { id: displayed_issue_ids })
+         .where.not("#{Issue.table_name}.id = ancestors.id")
+         .select(
+           "#{Issue.table_name}.id",
+           "#{Issue.table_name}.parent_id",
+           "#{Issue.table_name}.subject",
+           "#{Issue.table_name}.tracker_id",
+           "#{Issue.table_name}.status_id",
+           "#{Issue.table_name}.start_date",
+           "#{Issue.table_name}.due_date",
+           "ancestors.id AS ancestor_id"
+         )
+         .to_a
+  end
+
+  def gantt_visible_descendants_for(issues, all_descendants = nil)
     displayed_issue_ids = Array(issues).map(&:id).compact
     return [] if displayed_issue_ids.empty?
 
@@ -674,26 +708,7 @@ module RedmineTxMilestoneHelper
       end
     end
 
-    return [] unless issues.all? { |issue| issue.is_a?(Issue) }
-
-    Issue.visible
-         .joins(
-           "JOIN #{Issue.table_name} ancestors" \
-           " ON ancestors.root_id = #{Issue.table_name}.root_id" \
-           " AND ancestors.lft <= #{Issue.table_name}.lft" \
-           " AND ancestors.rgt >= #{Issue.table_name}.rgt"
-         )
-         .where(ancestors: { id: displayed_issue_ids })
-         .where.not("#{Issue.table_name}.id = ancestors.id")
-         .select(
-           "#{Issue.table_name}.id",
-           "#{Issue.table_name}.parent_id",
-           "#{Issue.table_name}.tracker_id",
-           "#{Issue.table_name}.start_date",
-           "#{Issue.table_name}.due_date",
-           "ancestors.id AS ancestor_id"
-         )
-         .to_a
+    all_descendants || gantt_all_descendants_for(issues)
   end
 
   def gantt_merge_date_segments(segments)
@@ -718,25 +733,7 @@ module RedmineTxMilestoneHelper
     displayed_issue_ids = issues.map(&:id)
     return {} if displayed_issue_ids.empty?
 
-    descendant_issues ||= Issue.visible
-                              .joins(
-                                "JOIN #{Issue.table_name} ancestors" \
-                                " ON ancestors.root_id = #{Issue.table_name}.root_id" \
-                                " AND ancestors.lft <= #{Issue.table_name}.lft" \
-                                " AND ancestors.rgt >= #{Issue.table_name}.rgt"
-                              )
-                              .where(ancestors: { id: displayed_issue_ids })
-                              .where.not("#{Issue.table_name}.id = ancestors.id")
-                              .select(
-                                "#{Issue.table_name}.id",
-                                "#{Issue.table_name}.subject",
-                                "#{Issue.table_name}.tracker_id",
-                                "#{Issue.table_name}.status_id",
-                                "#{Issue.table_name}.start_date",
-                                "#{Issue.table_name}.due_date",
-                                "ancestors.id AS ancestor_id"
-                              )
-                              .to_a
+    descendant_issues ||= gantt_all_descendants_for(issues)
 
     descendant_issues.each_with_object({}) do |descendant, warning_details_map|
       next unless gantt_schedule_required?(descendant)
@@ -749,6 +746,67 @@ module RedmineTxMilestoneHelper
         reason: "완료기한 미기입"
       }
     end
+  end
+
+  # 일별 통계에서 버그 추이 데이터(오늘 잔여 기준 역산 + 날짜 유형) 생성.
+  # dashboard와 report(bugs)가 같은 로직을 공유한다. 공휴일은 일괄 조회.
+  def milestone_bug_trend_data(issues_by_days, rest_issue_count_per_category)
+    days = Array(issues_by_days).map { |day_data| day_data[:day] }
+    holidays = {}
+    if days.any? && defined?(TxBaseHelper::HolidayApi) && TxBaseHelper::HolidayApi.available?
+      holidays = TxBaseHelper::HolidayApi.for_date_range(days.min, days.max)
+    end
+
+    bug_data = []
+    remaining_bugs = (rest_issue_count_per_category || {})['BUG'] || 0
+    Array(issues_by_days).each do |day_data|
+      bug_category = day_data[:issues_by_category]['BUG']
+      created = bug_category ? bug_category[:created] : 0
+      completed = bug_category ? bug_category[:completed] : 0
+      date = day_data[:day]
+      date_type = if holidays[date]
+                    'holiday'
+                  elsif date.sunday?
+                    'sunday'
+                  elsif date.saturday?
+                    'saturday'
+                  else
+                    'weekday'
+                  end
+
+      bug_data << { date: date.strftime('%m-%d'), created: created, completed: completed, remaining: remaining_bugs, date_type: date_type }
+      # 한 단계 과거로 이동: 오늘 기준 잔여에서 (그 날 해결 수)를 더하고 (그 날 생성 수)를 뺌
+      remaining_bugs = remaining_bugs + completed - created
+    end
+    bug_data.reverse
+  end
+
+  # 간트 차트 공용 스타일/스크립트를 요청당 한 번만 포함
+  def gantt_chart_assets
+    return ''.html_safe if @gantt_chart_assets_included
+
+    @gantt_chart_assets_included = true
+    safe_join([
+      render(partial: 'milestone/gantt_style'),
+      javascript_include_tag('tx_milestone_gantt_chart', plugin: 'redmine_tx_milestone')
+    ])
+  end
+
+  # 담당자 링크 렌더링 결과를 요청 내에서 캐싱
+  def cached_link_to_principal(principal, options = {})
+    @cached_principals ||= {}
+    principal_id = principal.is_a?(Principal) ? principal.id : principal
+
+    unless @cached_principals.key?(principal_id)
+      if principal.is_a?(Principal)
+        @cached_principals[principal_id] = link_to_principal(principal, options)
+      else
+        principal_obj = Principal.find_by(id: principal_id)
+        @cached_principals[principal_id] = principal_obj ? link_to_principal(principal_obj, options) : principal_id.to_s
+      end
+    end
+
+    @cached_principals[principal_id]
   end
 
   # 간트 차트용 이슈 배열 생성
@@ -768,7 +826,8 @@ module RedmineTxMilestoneHelper
     end
   end
 
-  module_function :milestone_review_issues,
+  module_function :milestone_major_issues, :milestone_review_issues,
+                  :milestone_bug_trend_data,
                   :get_version_color, :build_issue_query, :render_issues,
                   :build_bug_issues_filter_params, :link_to_issue_with_id, :link_to_bug_issues_count,
                   :gantt_issue_css_class,
@@ -781,6 +840,7 @@ module RedmineTxMilestoneHelper
                   :gantt_delayed_schedule_segment,
                   :gantt_parent_planning_segments_map,
                   :gantt_planning_line_bounds,
+                  :gantt_all_descendants_for,
                   :gantt_visible_descendants_for,
                   :gantt_merge_date_segments,
                   :gantt_child_schedule_warning_map, :gantt_child_schedule_warning_details_map,

@@ -160,24 +160,17 @@
     display: contents; /* 요소 자체는 레이아웃에 영향을 주지 않고, 자식 요소들이 부모 grid에 직접 배치되도록 함 */
   }
   
-  /* task-cell: 각 작업 행의 날짜 셀 */
-  .gantt-wrapper .task-cell {
+  /* task-lane: 우측 차트의 작업 행. 그리드 전체 폭을 차지하며
+     내부 요소(task-bar, arrow-line 등)는 차트 시작일 기준 left(px)로 절대 배치된다.
+     날짜별 세로 격자선은 인라인 repeating-linear-gradient 배경으로 그린다. */
+  .gantt-wrapper .task-lane {
+    grid-column: 1 / -1; /* 그리드의 모든 컬럼에 걸침 */
     position: relative; /* 자식 요소(task-bar 등)의 position:absolute 기준점 */
     border-bottom: 1px solid #eee;
-    border-right: 1px solid #eee;
-    min-width: 18px; /* date-header와 동일한 최소 너비 유지 */
-    display: flex; /* 내부 요소 정렬을 위해 flex 사용 */
-    align-items: center; /* 세로 중앙 정렬 */
-    justify-content: center; /* 가로 중앙 정렬 */
   }
 
-  /* task-cell.w: 주말(Weekend) 또는 특정 상태의 셀 강조 */
-  .gantt-wrapper .task-cell.w {
-    background-color: rgba(255, 0, 0, 0.1); /* 배경색으로 구분 */
-  }
-
-  /* task-cell.n: 완료기한 없음 강조 */
-  .gantt-wrapper .task-cell.n {
+  /* task-lane.n: 완료기한 없음 강조 */
+  .gantt-wrapper .task-lane.n {
     background-color: rgba(0, 0, 0, 0.1); /* 배경색으로 구분 */
   }
   
@@ -567,16 +560,17 @@
   .gantt-wrapper .depth-indent { color: #aaa; }
   .gantt-wrapper .virtual-marker { color: #000; font-weight: bold; }
 
-  /* 팁/상태이력 라벨 */
+  /* 팁/상태이력 라벨 (폭은 파셜에서 셀 10칸 크기로 인라인 지정 — %를 쓰면 행 전체 기준이 되어 스크롤 영역이 폭발함) */
   .gantt-wrapper .gantt-tip-label {
     font-weight: bold; z-index: 10; font-size: 10px; color: #f66;
-    position: absolute; bottom: 0; display: inline-block; width: 1000%; text-align: left;
+    position: absolute; bottom: 0; display: inline-block; text-align: left;
   }
   .gantt-wrapper .gantt-status-label {
     font-weight: bold; z-index: 10; font-size: 8px; color: #000;
-    position: absolute; bottom: 0; display: inline-block; width: 1000%; text-align: left;
+    position: absolute; bottom: 0; display: inline-block; text-align: left;
   }
 </style>
 
-<%# Font Awesome CSS 추가 %>
-<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css">
+<%# Font Awesome CSS 추가 (SRI로 무결성 고정) %>
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css"
+      integrity="sha384-3B6NwesSXE7YJlcLI9RpRqGf2p/EgVH8BgoKTaUrmKNDkHPStTQ3EyoYjCGXaOTS" crossorigin="anonymous">

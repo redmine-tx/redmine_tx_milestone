@@ -1,6 +1,6 @@
 <%
   e_group = TxBaseHelper.config_arr( 'e_group' )
-  group_id = params[:group_id] || ( ( User.current.group_ids ? User.current.group_ids : [] ) - e_group ).first
+  group_id = params[:group_id] || ( User.current.group_ids - e_group ).first
 %>
 
 <!-- 팀 탭 컨트롤 -->
@@ -8,7 +8,8 @@
     selected_group_id: group_id %>
 
 <%
-  if group_id.nil?
+  group = group_id && Group.find_by( id: group_id )
+  if group.nil?
 %>
     <div style="border: 1px solid #ffcccb; background-color: #ffe6e6; padding: 20px; margin: 20px 0; border-radius: 4px; text-align: center;">
         <h3 style="color: #d32f2f; margin: 0 0 10px 0;">그룹 정보 없음</h3>
@@ -21,8 +22,6 @@
     return
   end
 
-  group = Group.find( group_id )
-
   users = group.users.active
   user_ids = users.map(&:id)
 
@@ -34,7 +33,8 @@
 
   vacation_info = UserStatusHelper.get_user_vacation_info( gantt_start_date..gantt_end_date )
 
-  issues = Issue.where( '( worker_id IN (?) AND ( ( begin_time >= ? OR end_time >= ? ) OR ( begin_time IS NOT NULL AND end_time IS NULL ) ) ) OR 
+  issues = Issue.visible
+                .where( '( worker_id IN (?) AND ( ( begin_time >= ? OR end_time >= ? ) OR ( begin_time IS NOT NULL AND end_time IS NULL ) ) ) OR
                             ( assigned_to_id IN (?) AND ( ( ( start_date IS NOT NULL AND start_date <= (?) ) OR ( due_date IS NOT NULL AND due_date <= (?) ) ) AND status_id NOT IN (?) ) )',
                             user_ids, gantt_start_date, gantt_start_date, user_ids, gantt_end_date, gantt_end_date, IssueStatus.implemented_ids ).order(begin_time: :asc, start_date: :asc).select{ |issue| !IssueStatus.is_discarded?( issue.status_id ) && !IssueStatus.is_postponed?( issue.status_id ) }
 

@@ -35,14 +35,18 @@ class MilestoneController < ApplicationController
     def dashboard
       version_id_param = params[:version_id]
       @selected_version_id = if version_id_param.present? && version_id_param != 'all'
-                               version_id_param.to_i
+                               version = @project.shared_versions.find_by(id: version_id_param)
+                               return render_404 unless version
+
+                               version.id
                              else
                                @project&.default_version&.id
                              end
 
       if @selected_version_id
         skip_cache = Rails.env.development?
-        cache_base = "milestone/dashboard/#{@project.id}/#{@selected_version_id}/#{Date.today}"
+        # SummaryService 결과는 사용자별 가시성에 의존하므로 캐시 키에 사용자 포함
+        cache_base = "milestone/dashboard/#{@project.id}/#{@selected_version_id}/#{User.current.id}/#{Date.today}"
         force = params[:force] == 'true' || skip_cache
 
         if force
@@ -63,6 +67,30 @@ class MilestoneController < ApplicationController
     end
 
     def gantt
+      if params[:issue_id]
+        @gantt_issue = Issue.visible.find(params[:issue_id])
+        @gantt_issues = gantt_issue_tree(@gantt_issue)
+        @gantt_due_date = @gantt_issue.fixed_version ? @gantt_issue.fixed_version.effective_date : @gantt_issue.due_date
+      else
+        @gantt_versions = @project.shared_versions
+                                  .open
+                                  .where.not(effective_date: nil)
+                                  .order(:effective_date)
+                                  .to_a
+                                  .first(16)
+        @gantt_selected_version =
+          if params[:version_id].present?
+            @gantt_versions.find { |v| v.id == params[:version_id].to_i } ||
+              @project.shared_versions.find_by(id: params[:version_id])
+          else
+            @gantt_versions.find { |v| v.effective_date >= Date.today } || @gantt_versions.first
+          end
+        return render_404 if params[:version_id].present? && @gantt_selected_version.nil?
+
+        @gantt_issue_groups = gantt_version_issue_groups(@gantt_selected_version)
+      end
+    rescue ActiveRecord::RecordNotFound
+      render_404
     end
 
     def update_issue_schedule
@@ -112,7 +140,7 @@ class MilestoneController < ApplicationController
       render_404
     rescue => e
       Rails.logger.error "update_issue_schedule error: #{e.message}\n#{e.backtrace.first(5).join("\n")}"
-      render_schedule_error("일정 저장 중 오류가 발생했습니다: #{e.message}", :internal_server_error)
+      render_schedule_error('일정 저장 중 오류가 발생했습니다.', :internal_server_error)
     end
 
     def update_issue_schedules
@@ -208,7 +236,7 @@ class MilestoneController < ApplicationController
       }
     rescue => e
       Rails.logger.error "update_issue_schedules error: #{e.message}\n#{e.backtrace.first(5).join("\n")}"
-      render_schedule_error("일정 저장 중 오류가 발생했습니다: #{e.message}", :internal_server_error)
+      render_schedule_error('일정 저장 중 오류가 발생했습니다.', :internal_server_error)
     end
 
     def predict_issue
@@ -231,30 +259,45 @@ class MilestoneController < ApplicationController
           issue_ids
         )
 
-        saved_count = 0
-        result_issues.each do |ri|
-          issue = Issue.find(ri.id)
-          saved_count += 1 if RedmineTxMilestone::IssueScheduleWriteService.apply(
-            issue: issue,
-            start_date: ri.start_date,
-            due_date: ri.due_date,
-            user: User.current
-          )
-        end
-
         # 최상위 부모 일감의 완료일을 자식 중 가장 늦은 날짜로 업데이트
         top_issue = @issue
         while top_issue.parent.present?
           top_issue = top_issue.parent
         end
-        latest_due_date = top_issue.self_and_descendants.map(&:due_date).compact.max
-        if latest_due_date.present? && (top_issue.due_date.nil? || top_issue.due_date < latest_due_date)
-          RedmineTxMilestone::IssueScheduleWriteService.apply(
-            issue: top_issue,
-            start_date: top_issue.start_date,
-            due_date: latest_due_date,
-            user: User.current
-          )
+
+        # 저장 전에 모든 대상 일감의 편집 권한을 확인 (보이지 않거나 권한 없는 일감이 있으면 전체 거부)
+        target_issues = Issue.visible.where(id: result_issues.map(&:id)).index_by(&:id)
+        unauthorized = result_issues.reject do |ri|
+          (issue = target_issues[ri.id]) && issue_schedule_editable?(issue)
+        end
+        unauthorized << top_issue unless issue_schedule_editable?(top_issue)
+        if unauthorized.any?
+          return render json: {
+            success: false,
+            message: "일정을 수정할 권한이 없는 일감이 있습니다: #{unauthorized.map { |i| "##{i.id}" }.join(', ')}"
+          }, status: :forbidden
+        end
+
+        saved_count = 0
+        ActiveRecord::Base.transaction do
+          result_issues.each do |ri|
+            saved_count += 1 if RedmineTxMilestone::IssueScheduleWriteService.apply(
+              issue: target_issues[ri.id],
+              start_date: ri.start_date,
+              due_date: ri.due_date,
+              user: User.current
+            )
+          end
+
+          latest_due_date = top_issue.self_and_descendants.map(&:due_date).compact.max
+          if latest_due_date.present? && (top_issue.due_date.nil? || top_issue.due_date < latest_due_date)
+            RedmineTxMilestone::IssueScheduleWriteService.apply(
+              issue: top_issue,
+              start_date: top_issue.start_date,
+              due_date: latest_due_date,
+              user: User.current
+            )
+          end
         end
 
         render json: {
@@ -263,9 +306,10 @@ class MilestoneController < ApplicationController
           saved_count: saved_count
         }
       rescue => e
+        Rails.logger.error "apply_predict_issue error: #{e.class} #{e.message}\n#{e.backtrace.first(5).join("\n")}"
         render json: {
           success: false,
-          message: "일정 저장 중 오류가 발생했습니다: #{e.message}"
+          message: '일정 저장 중 오류가 발생했습니다.'
         }, status: :internal_server_error
       end
     end
@@ -283,12 +327,17 @@ class MilestoneController < ApplicationController
       version_id_param = params[:version_id]
       version_id = if version_id_param == 'all'
                      nil
+                   elsif version_id_param.present?
+                     version = @project.shared_versions.find_by(id: version_id_param)
+                     return render_404 unless version
+
+                     version.id
                    else
-                     (version_id_param.presence || @project&.default_version&.id)
+                     @project&.default_version&.id
                    end
-      
-      # 캐시 키에 report_type 포함
-      cache_key = "_milestone_report_#{@project.id}_#{version_id}_#{today.strftime('%Y-%m-%d_%H-%M')}_#{report_type}"
+
+      # 집계가 사용자별 가시성에 의존하므로 캐시 키에 report_type과 사용자 포함
+      cache_key = "_milestone_report_#{@project.id}_#{version_id}_#{User.current.id}_#{today.strftime('%Y-%m-%d_%H-%M')}_#{report_type}"
       expires_in = if Rails.env.development?
                      1.second
                    else
@@ -321,16 +370,24 @@ class MilestoneController < ApplicationController
       end
 
       # assign_from_date : 이 날짜 이후로만 일정 배치 가능하도록 한다. 디폴트는 오늘.
-      assign_from_date = params[:assign_from_date] ? Date.parse(params[:assign_from_date]) : Date.today
+      assign_from_date = begin
+        params[:assign_from_date] ? Date.parse(params[:assign_from_date]) : Date.today
+      rescue ArgumentError
+        Date.today
+      end
 
       # 일감 정보 조회 및 분석 (한 번에 처리)
-      @issues_info = if params[:user_id].present?
-                       RedmineTxMilestoneAutoScheduleHelper::AutoScheduler.analyze_user_schedule(params[:user_id])
-                     elsif params[:parent_issue_id].present?
-                       RedmineTxMilestoneAutoScheduleHelper::AutoScheduler.analyze_parent_schedule(params[:parent_issue_id])
-                     else
-                       { all_issues: [], fixed_issues: [], other_issues: [], candidate_issues: [], no_estimated_hours_issues: [] }
-                     end
+      @issues_info = begin
+        if params[:user_id].present?
+          RedmineTxMilestoneAutoScheduleHelper::AutoScheduler.analyze_user_schedule(params[:user_id])
+        elsif params[:parent_issue_id].present?
+          RedmineTxMilestoneAutoScheduleHelper::AutoScheduler.analyze_parent_schedule(params[:parent_issue_id])
+        else
+          { all_issues: [], fixed_issues: [], other_issues: [], candidate_issues: [], no_estimated_hours_issues: [] }
+        end
+      rescue ActiveRecord::RecordNotFound
+        return render_404
+      end
 
       # 일정 자동 배치 (저장은 되지 않음)
       if params[:auto_schedule] == 'true' && params[:issue_ids].present?
@@ -348,23 +405,35 @@ class MilestoneController < ApplicationController
       elsif params[:save_schedule] == 'true' && params[:issue_data].present?
         begin
           issue_data = JSON.parse(params[:issue_data])
-          saved_count = 0
 
-          issue_data.each do |data|
-            issue = Issue.find(data['id'])
-            saved_count += 1 if RedmineTxMilestone::IssueScheduleWriteService.apply(
-              issue: issue,
-              start_date: Date.parse(data['start_date']),
-              due_date: Date.parse(data['due_date']),
-              user: User.current
-            )
+          # 저장 전에 모든 대상 일감의 가시성/편집 권한을 확인
+          target_issues = Issue.visible.where(id: issue_data.map { |data| data['id'] }).index_by(&:id)
+          unauthorized_ids = issue_data.filter_map do |data|
+            issue = target_issues[data['id'].to_i]
+            data['id'] unless issue && issue_schedule_editable?(issue)
           end
-          
-          flash[:notice] = "#{saved_count}개 일감의 일정이 확정되었습니다."
-          redirect_to tetris_project_milestone_index_path(@project, user_id: params[:user_id], parent_issue_id: params[:parent_issue_id])
-          return
+          if unauthorized_ids.any?
+            flash[:error] = "일정을 수정할 권한이 없는 일감이 있습니다: #{unauthorized_ids.map { |id| "##{id}" }.join(', ')}"
+          else
+            saved_count = 0
+            ActiveRecord::Base.transaction do
+              issue_data.each do |data|
+                saved_count += 1 if RedmineTxMilestone::IssueScheduleWriteService.apply(
+                  issue: target_issues[data['id'].to_i],
+                  start_date: Date.parse(data['start_date']),
+                  due_date: Date.parse(data['due_date']),
+                  user: User.current
+                )
+              end
+            end
+
+            flash[:notice] = "#{saved_count}개 일감의 일정이 확정되었습니다."
+            redirect_to tetris_project_milestone_index_path(@project, user_id: params[:user_id], parent_issue_id: params[:parent_issue_id])
+            return
+          end
         rescue => e
-          flash[:error] = "일정 저장 중 오류가 발생했습니다: #{e.message}"
+          Rails.logger.error "tetris save_schedule error: #{e.class} #{e.message}\n#{e.backtrace.first(5).join("\n")}"
+          flash[:error] = '일정 저장 중 오류가 발생했습니다.'
         end
       end
     end
@@ -408,7 +477,7 @@ class MilestoneController < ApplicationController
         end
       rescue => e
         Rails.logger.error "ai_summary error: #{e.message}\n#{e.backtrace.first(5).join("\n")}"
-        render json: { success: false, error: "요약 생성 중 오류가 발생했습니다: #{e.message}" }
+        render json: { success: false, error: '요약 생성 중 오류가 발생했습니다.' }
       end
     end
 
@@ -419,9 +488,15 @@ class MilestoneController < ApplicationController
       begin
         if params[:ids].present?
           updated_count = 0
-          issues = Issue.where(id: params[:ids])
+          skipped_ids = []
+          issues = Issue.visible.where(id: params[:ids])
 
           issues.each do |issue|
+            unless issue_schedule_editable?(issue, edit_start_date: false)
+              skipped_ids << issue.id
+              next
+            end
+
             # 자식 일감들의 최대 완료일을 조회
             max_child_due = issue.descendants
                                 .where.not(due_date: nil)
@@ -437,9 +512,11 @@ class MilestoneController < ApplicationController
             )
           end
 
+          message = "#{updated_count}개 일감의 일정을 동기화했습니다."
+          message += " (권한 없는 일감 #{skipped_ids.size}건 제외)" if skipped_ids.any?
           render json: {
             success: true,
-            message: "#{updated_count}개 일감의 일정을 동기화했습니다."
+            message: message
           }
         else
           render json: {
@@ -448,9 +525,10 @@ class MilestoneController < ApplicationController
           }
         end
       rescue => e
+        Rails.logger.error "api_sync_parent_date error: #{e.class} #{e.message}\n#{e.backtrace.first(5).join("\n")}"
         render json: {
           success: false,
-          message: "동기화 중 오류가 발생했습니다: #{e.message}"
+          message: '동기화 중 오류가 발생했습니다.'
         }
       end
     end
@@ -510,7 +588,7 @@ class MilestoneController < ApplicationController
     # dashboard AI 요약용 프롬프트 생성 (overview 데이터를 직접 조회)
     def build_dashboard_ai_prompt
       version_id = if params[:version_id].present? && params[:version_id] != 'all'
-                     params[:version_id].to_i
+                     @project.shared_versions.find_by(id: params[:version_id])&.id
                    else
                      @project&.default_version&.id
                    end
@@ -614,8 +692,8 @@ class MilestoneController < ApplicationController
             case a[:type]
             when 'past_dev_deadline' then "마감초과 #{a[:count]}건"
             when 'overdue_descendants' then "지연 #{a[:overdue_count]}건"
-            when 'no_due_date_descendants' then "일정없음 #{a[:count]}건"
-            when 'not_started_descendants' then "미개시 #{a[:count]}건"
+            when 'no_due_date' then "일정없음 #{a[:count]}건"
+            when 'not_started' then "미개시 #{a[:count]}건"
             end
           end.compact
           data_lines << "  #{alert_list.first[:subject]}: #{parts.join(', ')}"
@@ -672,6 +750,61 @@ class MilestoneController < ApplicationController
       "#{context}\n\n#{prompt}"
     end
 
+  # 루트 일감과 그 하위 트리를 표시 순서대로 평탄화 (폐기된 하위 트리는 제외)
+  def gantt_issue_tree(root_issue)
+    children_by_parent_id = root_issue.self_and_descendants.visible.to_a.group_by(&:parent_id)
+    ordered = []
+    visit = lambda do |issue|
+      ordered << issue
+      Array(children_by_parent_id[issue.id]).sort_by(&:lft).each do |child|
+        next if IssueStatus.is_discarded?(child.status_id)
+
+        visit.call(child)
+      end
+    end
+    visit.call(root_issue)
+    ordered
+  end
+
+  # 버전 간트에 표시할 일감 그룹 (주요/메인/이관 대기)
+  def gantt_version_issue_groups(version)
+    return { major: [], main: [], review: [] } if version.nil?
+
+    main_issues = Issue.visible
+                       .where(fixed_version_id: version.id, tracker_id: Tracker.roadmap_trackers_ids)
+                       .where.not(status_id: IssueStatus.discarded_ids)
+                       .to_a
+    major_issues = if RedmineTxMilestoneHelper.major_issue_tag_names.present?
+                     RedmineTxMilestoneHelper.milestone_major_issues(main_issues)
+                   else
+                     []
+                   end
+    major_issue_ids = major_issues.map(&:id).to_set
+    remaining_main_issues = main_issues.reject { |issue| major_issue_ids.include?(issue.id) }
+    review_issues = RedmineTxMilestoneHelper.milestone_review_issues(version)
+
+    groups = { major: major_issues, main: remaining_main_issues, review: review_issues }
+    groups.each_value { |issues| sort_gantt_issues!(issues) }
+    groups
+  end
+
+  # implemented 상태는 맨 아래로 내린다.
+  # implemented 아닌 일감은 마감일 없음 우선, 마감일 오름차순으로,
+  # implemented 일감은 마감일 없음 우선, 마감일 내림차순으로 정렬한다.
+  # 이후 시작일 오름차순, 마지막으로 done_ratio 오름차순을 적용한다.
+  def sort_gantt_issues!(issues)
+    issues.sort_by! do |issue|
+      implemented = IssueStatus.is_implemented?(issue.status_id)
+      [
+        implemented ? 1 : 0,
+        issue.due_date.nil? ? 0 : 1,
+        issue.due_date ? (implemented ? -issue.due_date.jd : issue.due_date.jd) : 0,
+        issue.start_date ? issue.start_date.jd : Float::INFINITY,
+        issue.done_ratio
+      ]
+    end
+  end
+
   def find_issue_for_predict
     @issue = Issue.visible.find(params[:issue_id])
   end
@@ -693,14 +826,15 @@ class MilestoneController < ApplicationController
 
   # 일반 일감 데이터 조회
   def get_issues_data(base_data, version_id)
-    all_issues = Issue.where(project_id: @project.id)
+    all_issues = Issue.visible
+                     .where(project_id: @project.id)
                      .where(tracker_id: base_data[:tracker_ids])
                      .where.not(status_id: base_data[:discarded_ids])
     all_issues = all_issues.where(fixed_version_id: version_id) if version_id
     
     all_completed_issues = all_issues.where.not(end_time: nil)
-    issues = all_issues.where('created_on >= ? OR end_time >= ?', Date.today - 1.year, Date.today - 1.year)
-    
+    issues = all_issues.where("#{Issue.table_name}.created_on >= ? OR #{Issue.table_name}.end_time >= ?", Date.today - 1.year, Date.today - 1.year)
+
     {
       all_issues: all_issues,
       all_completed_issues: all_completed_issues,
@@ -710,12 +844,16 @@ class MilestoneController < ApplicationController
 
   # 버그 데이터 조회
   def get_bug_data(base_data, version_id)
-    all_bug_issues = Issue.where(tracker_id: base_data[:bug_ids])
+    # 뷰에서 priority/fixed_version 기준 정렬에 사용하므로 미리 로드
+    all_bug_issues = Issue.visible
+                         .where(project_id: @project.id)
+                         .where(tracker_id: base_data[:bug_ids])
                          .where.not(status_id: base_data[:discarded_ids])
+                         .includes(:priority, :fixed_version)
     all_bug_issues = all_bug_issues.where(fixed_version_id: version_id) if version_id
     
     all_bug_completed_issues = all_bug_issues.where.not(end_time: nil)
-    bug_issues = all_bug_issues.where('created_on >= ? OR end_time >= ?', Date.today - 1.year, Date.today - 1.year)
+    bug_issues = all_bug_issues.where("#{Issue.table_name}.created_on >= ? OR #{Issue.table_name}.end_time >= ?", Date.today - 1.year, Date.today - 1.year)
     
     {
       all_bug_issues: all_bug_issues,
@@ -915,7 +1053,7 @@ class MilestoneController < ApplicationController
     # 버그 통계용 데이터 (일반 일감 제외)
     issues_by_days = calculate_daily_stats(today, [], bug_data[:bug_issues], base_data[:categories], nil, bug_data[:all_bug_issues], include_bugs: true)
     # today 시점 기준으로 BUG 잔여 개수를 다시 계산
-    bugs_until_today = bug_data[:all_bug_issues].where('created_on <= ?', today.end_of_day)
+    bugs_until_today = bug_data[:all_bug_issues].where("#{Issue.table_name}.created_on <= ?", today.end_of_day)
     bugs_completed_until_today = bugs_until_today.where.not(end_time: nil)
                                                  .where('end_time <= ?', today.end_of_day)
 
@@ -995,7 +1133,7 @@ class MilestoneController < ApplicationController
     def schedule_summary_all_groups
       @schedule_summary_all_groups ||= begin
         excluded_group_ids = Array(TxBaseHelper.config_arr('e_group')).map(&:to_i)
-        Group.all.reject { |group| excluded_group_ids.include?(group.id) }.sort_by(&:name)
+        Group.includes(:users).reject { |group| excluded_group_ids.include?(group.id) }.sort_by(&:name)
       end
     end
 
@@ -1008,11 +1146,15 @@ class MilestoneController < ApplicationController
 
     def compute_schedule_summary_data
       today = Date.today
-      display_start_date = params[:display_start_date].present? ? Date.parse(params[:display_start_date]) : 2.months.ago.to_date
+      display_start_date = begin
+        params[:display_start_date].present? ? Date.parse(params[:display_start_date]) : 2.months.ago.to_date
+      rescue ArgumentError
+        2.months.ago.to_date
+      end
       mode = schedule_summary_mode
 
       groups_to_show = schedule_summary_groups_to_show
-      selected_user_ids = groups_to_show.flat_map { |group| group.users.pluck(:id) }.uniq
+      selected_user_ids = groups_to_show.flat_map { |group| group.users.map(&:id) }.uniq
 
       if mode == 'team'
         input_issue_ids = []
@@ -1021,13 +1163,16 @@ class MilestoneController < ApplicationController
       else
         # 일감 ID 파싱 → 부모 일감 → 하위 일감 (ERB 로직 재현)
         input_issue_ids = params[:issue_ids].to_s.split(/[,;\s]+/).map(&:strip).reject(&:empty?).map(&:to_i).uniq
-        input_issues = Issue.where(id: input_issue_ids)
-        parent_issues = input_issues.map(&:root).uniq { |issue| issue.id }
+        input_issues = Issue.visible.where(id: input_issue_ids).to_a
+        parent_issues = Issue.visible.where(id: input_issues.map(&:root_id).uniq).to_a
 
-        all_issue_ids = Set.new(input_issue_ids)
-        parent_issues.each { |i| all_issue_ids.merge(i.descendants.pluck(:id)) }
+        all_issue_ids = Set.new(input_issues.map(&:id))
+        # parent_issues는 루트이므로 하위 트리 전체가 같은 root_id를 가짐
+        all_issue_ids.merge(
+          Issue.visible.where(root_id: parent_issues.map(&:id)).where.not(id: parent_issues.map(&:id)).pluck(:id)
+        )
 
-        all_issues = Issue.where(id: all_issue_ids.to_a)
+        all_issues = Issue.visible.where(id: all_issue_ids.to_a)
       end
 
       # tracker/status 필터 (ERB와 동일)
@@ -1041,12 +1186,7 @@ class MilestoneController < ApplicationController
                              .where('start_date >= ? OR due_date >= ?', display_start_date, display_start_date)
 
       if mode == 'team'
-        top_issue_by_id = {}
-        filtered.each do |issue|
-          root_issue = issue.root
-          top_issue_by_id[root_issue.id] ||= root_issue
-        end
-        parent_issues = top_issue_by_id.values
+        parent_issues = Issue.visible.where(id: filtered.distinct.pluck(:root_id)).to_a
       end
 
       # 1. parent_issues
@@ -1233,7 +1373,7 @@ class MilestoneController < ApplicationController
     end
 
     def find_project
-      @user = params[:user_id] ? User.find(params[:user_id]) : User.current
+      @user = params[:user_id] ? User.visible.find(params[:user_id]) : User.current
       @project = Project.find(params[:project_id])
     rescue ActiveRecord::RecordNotFound
       render_404
@@ -1310,11 +1450,12 @@ class MilestoneController < ApplicationController
         .distinct #.select{ |u| (u.group_ids & excluded_group_ids).empty? }
 
       excluded_group_ids = TxBaseHelper.config_arr('e_group') || []
-      all_groups = Group.all.select{ |group| !excluded_group_ids.include?(group.id) }
+      all_groups = Group.includes(:users).select{ |group| !excluded_group_ids.include?(group.id) }
 
       all_groups.each do |group|
+        group_user_ids = group.users.map(&:id).to_set
         # @users의 순서를 유지하면서 해당 그룹의 사용자만 필터링
-        groups[ group ] = { user_infos: all_users.filter_map { |user| { user: user, issue_info: RedmineTxMilestoneAutoScheduleHelper::AutoScheduler.analyze_user_schedule( user.id ) } if group.users.map(&:id).include?(user.id) } }
+        groups[ group ] = { user_infos: all_users.filter_map { |user| { user: user, issue_info: RedmineTxMilestoneAutoScheduleHelper::AutoScheduler.analyze_user_schedule( user.id ) } if group_user_ids.include?(user.id) } }
       end
 
       groups

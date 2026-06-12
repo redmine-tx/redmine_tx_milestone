@@ -11,15 +11,13 @@
   <% html_title("연기된 일감 조회") %>
   
   <%
-  
-  # 프로젝트 ID 조회
-  pid = Project.find_by(name: params[:project_id])&.id
-  
-  issues = Issue.where( project_id: pid )
+  issues = Issue.visible
+                .where( project_id: @project.id )
                 .where.not( due_date: nil )
                 .where( status_id: IssueStatus.in_progress_ids )
                 .open
                 .where( due_date: Date.today.. )
+                .includes( journals: :details )
 
   delayed_days_hash = {}
 
@@ -27,10 +25,13 @@
     delayed = false
     started = false
     delayed_days = 0
-    
-    issue.journals.order(:created_on).each do |journal|
+
+    # journals/details는 includes로 일괄 로드됨 — order/visible_details 재호출로 쿼리가 다시 나가지 않도록 메모리에서 정렬
+    issue.journals.sort_by(&:created_on).each do |journal|
+      details = journal.visible_details
+
       # due_date 변경 확인
-      due_date_detail = journal.visible_details.find { |d| d.prop_key == 'due_date' }
+      due_date_detail = details.find { |d| d.prop_key == 'due_date' }
       if due_date_detail && due_date_detail.old_value.present? && due_date_detail.value.present?
         begin
           if Date.parse(due_date_detail.value) > Date.parse(due_date_detail.old_value)
@@ -43,7 +44,7 @@
       end
       
       # status_id 변경 확인
-      status_detail = journal.visible_details.find { |d| d.prop_key == 'status_id' }
+      status_detail = details.find { |d| d.prop_key == 'status_id' }
       if status_detail && status_detail.value.present? && IssueStatus.in_progress_ids.include?(status_detail.value.to_i)
         started = true
       end
@@ -56,7 +57,7 @@
       end
 
       # 목표버전이 변경된 경우 delayed 를 false 로 초기화 하고 delayed_days 를 0 으로 초기화
-      fixed_version_detail = journal.visible_details.find { |d| d.prop_key == 'fixed_version_id' }
+      fixed_version_detail = details.find { |d| d.prop_key == 'fixed_version_id' }
       if fixed_version_detail && TxBaseHelper.version_delay_reset?(fixed_version_detail.old_value, fixed_version_detail.value)
         delayed = false
         delayed_days = 0

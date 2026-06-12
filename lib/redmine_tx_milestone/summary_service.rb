@@ -16,22 +16,34 @@ module RedmineTxMilestone
       # @param version_id [Integer]
       # @return [Hash] with keys :version, :parent_issues, :standalone, :stage_summary, :alerts
       def version_overview(version_id)
-        version = Version.find(version_id)
+        version = Version.find_by(id: version_id)
+        return { error: "Version not found" } unless version
+
         all_issues = version.fixed_issues.visible
                        .includes(:status, :tracker, :assigned_to, :priority, :category, :fixed_version)
                        .to_a
 
-        parent_issues = all_issues.select { |i| i.children.any? }
-        standalone_issues = all_issues.select { |i| i.parent_id.nil? && i.children.empty? }
+        # leaf? 는 lft/rgt 컬럼만 보므로 children 조회(이슈당 1쿼리)가 발생하지 않음
+        parent_issues = all_issues.reject(&:leaf?)
+        standalone_issues = all_issues.select { |i| i.parent_id.nil? && i.leaf? }
 
-        today = Date.today
+        children_by_parent_id = if parent_issues.any?
+                                  Issue.visible
+                                       .where(parent_id: parent_issues.map(&:id))
+                                       .includes(:status, :tracker, :assigned_to, :priority, :category)
+                                       .order(:lft)
+                                       .group_by(&:parent_id)
+                                else
+                                  {}
+                                end
+        spent_hours_by_issue_id = batch_spent_hours(children_by_parent_id.values.flatten)
+
+        today = User.current.today
         alerts = []
         stage_counts = Hash.new(0)
 
         parent_summaries = parent_issues.filter_map do |parent|
-          children = parent.children.visible
-                       .includes(:status, :tracker, :assigned_to, :priority, :category)
-                       .to_a
+          children = children_by_parent_id[parent.id] || []
 
           schedule_children = children.reject { |c| non_schedule_leaf?(c) }
 
@@ -83,7 +95,7 @@ module RedmineTxMilestone
               unassigned: unassigned_children.size,
               avg_done_ratio: schedule_children.size > 0 ? (schedule_children.sum { |c| c.done_ratio.to_i } / schedule_children.size.to_f).round(1) : 0,
               estimated_hours: schedule_children.sum { |c| c.estimated_hours.to_f },
-              spent_hours: schedule_children.sum { |c| c.spent_hours.to_f }
+              spent_hours: schedule_children.sum { |c| spent_hours_by_issue_id[c.id].to_f }
             },
             type_breakdown: build_type_breakdown(children)
           }
@@ -123,8 +135,6 @@ module RedmineTxMilestone
           stage_summary: stage_counts,
           alerts: alerts
         }
-      rescue ActiveRecord::RecordNotFound
-        { error: "Version not found" }
       end
 
       # ─── Dashboard Overview ──────────────────────────────────────
@@ -135,7 +145,9 @@ module RedmineTxMilestone
       # @param version_id [Integer]
       # @return [Hash] with keys :version, :roadmap_issues, :stage_summary, :alerts
       def dashboard_overview(version_id)
-        version = Version.find(version_id)
+        version = Version.find_by(id: version_id)
+        return { error: "Version not found" } unless version
+
         roadmap_tracker_ids = Tracker.respond_to?(:roadmap_trackers_ids) ? Tracker.roadmap_trackers_ids : []
 
         all_issues = version.fixed_issues.visible
@@ -152,21 +164,22 @@ module RedmineTxMilestone
           dev_deadline = dev_mark[:date] if dev_mark
         end
 
-        today = Date.today
+        today = User.current.today
         alerts = []
         stage_counts = Hash.new(0)
         assignee_risk = Hash.new { |h, k| h[k] = { overdue: [], not_started: [] } }
 
+        # 로드맵 일감별 하위 트리를 단일 쿼리로 일괄 조회 (일감당 1쿼리 방지)
+        descendants_by_ancestor_id = batch_descendants_by_ancestor(roadmap_issues)
+
         roadmap_summaries = roadmap_issues.map do |rm|
           # All descendants, not just direct children
-          descendants = rm.descendants.visible
-                          .includes(:status, :tracker, :assigned_to, :priority)
-                          .to_a
+          descendants = descendants_by_ancestor_id[rm.id] || []
 
           # Exclude discarded, then exclude bug/exception/sidejob leaf nodes
           descendants = descendants.reject { |d| discarded?(d) }
           schedule_descendants = descendants.reject { |d| non_schedule_leaf?(d) }
-          work_leaves = schedule_descendants.select { |d| d.children.empty? }
+          work_leaves = schedule_descendants.select(&:leaf?)
 
           done_work = work_leaves.select { |d| implemented_or_above?(d) }
           open_work = work_leaves - done_work
@@ -309,8 +322,6 @@ module RedmineTxMilestone
             .sort_by { |r| -r[:total] }
             .first(5)
         }
-      rescue ActiveRecord::RecordNotFound
-        { error: "Version not found" }
       end
 
       # ─── Children Summary ──────────────────────────────────────
@@ -320,12 +331,15 @@ module RedmineTxMilestone
       # @param parent_id [Integer]
       # @return [Hash] with keys :parent, :summary, :children_by_stage, :alerts
       def children_summary(parent_id)
-        parent = Issue.visible.find(parent_id)
+        parent = Issue.visible.find_by(id: parent_id)
+        return { error: "Issue not found" } unless parent
+
         children = parent.children.visible
                      .includes(:status, :tracker, :assigned_to, :priority, :category, :fixed_version)
                      .to_a
+        spent_hours_by_issue_id = batch_spent_hours(children)
 
-        today = Date.today
+        today = User.current.today
         grouped = {}
         alerts = []
 
@@ -333,7 +347,7 @@ module RedmineTxMilestone
           stage = stage_name_for(child)
 
           grouped[stage] ||= []
-          grouped[stage] << format_child(child)
+          grouped[stage] << format_child(child, spent_hours_by_issue_id[child.id].to_f, today)
 
           next if non_schedule_leaf?(child)
 
@@ -371,14 +385,12 @@ module RedmineTxMilestone
             overdue: overdue_children.size,
             done_ratio: schedule_children.size > 0 ? (schedule_children.sum { |c| c.done_ratio.to_i } / schedule_children.size.to_f).round(1) : 0,
             estimated_hours: schedule_children.sum { |c| c.estimated_hours.to_f },
-            spent_hours: schedule_children.sum { |c| c.spent_hours.to_f },
+            spent_hours: schedule_children.sum { |c| spent_hours_by_issue_id[c.id].to_f },
             type_breakdown: build_type_breakdown(children)
           },
           children_by_stage: grouped,
           alerts: alerts
         }
-      rescue ActiveRecord::RecordNotFound
-        { error: "Issue not found" }
       end
 
       private
@@ -410,7 +422,7 @@ module RedmineTxMilestone
         { code: code.to_s, message: issue.tip }
       end
 
-      def format_child(child)
+      def format_child(child, spent_hours, today)
         {
           id: child.id,
           subject: child.subject,
@@ -424,8 +436,8 @@ module RedmineTxMilestone
           start_date: child.start_date&.iso8601,
           due_date: child.due_date&.iso8601,
           estimated_hours: child.estimated_hours,
-          spent_hours: child.spent_hours,
-          is_overdue: child.due_date && child.due_date < Date.today && !child.status.is_closed?,
+          spent_hours: spent_hours,
+          is_overdue: child.due_date && child.due_date < today && !child.status.is_closed?,
           is_closed: child.status.is_closed?,
           updated_on: child.updated_on&.iso8601,
           tip: tip_fields(child)
@@ -498,7 +510,46 @@ module RedmineTxMilestone
       # Bug/exception/sidejob tracker leaf nodes are excluded from schedule calculations
       def non_schedule_leaf?(issue)
         return false unless Tracker.respond_to?(:is_bug?)
-        issue.children.empty? && (Tracker.is_bug?(issue.tracker_id) || Tracker.is_exception?(issue.tracker_id) || Tracker.is_sidejob?(issue.tracker_id))
+        # leaf? 는 lft/rgt 컬럼만 보므로 children 쿼리가 발생하지 않음
+        issue.leaf? && (Tracker.is_bug?(issue.tracker_id) || Tracker.is_exception?(issue.tracker_id) || Tracker.is_sidejob?(issue.tracker_id))
+      end
+
+      public
+
+      # 부모 일감들의 모든 하위 일감(전체 컬럼)을 (ancestor_id 포함) 단일 쿼리로 조회.
+      # 부모별 descendants 반복 조회를 대체하는 공용 헬퍼.
+      def descendants_by_ancestor(ancestor_issues)
+        batch_descendants_by_ancestor(ancestor_issues)
+      end
+
+      private
+
+      # 일감 목록의 작업시간 합계를 단일 쿼리로 조회 (issue.spent_hours의 이슈당 SUM 쿼리 방지)
+      def batch_spent_hours(issues)
+        ids = Array(issues).map(&:id)
+        return Hash.new(0.0) if ids.empty?
+
+        TimeEntry.where(issue_id: ids).group(:issue_id).sum(:hours).tap { |h| h.default = 0.0 }
+      end
+
+      # 부모 일감들의 모든 하위 일감을 (ancestor_id 포함) 단일 쿼리로 조회
+      def batch_descendants_by_ancestor(ancestor_issues)
+        ancestor_ids = Array(ancestor_issues).map(&:id)
+        return {} if ancestor_ids.empty?
+
+        Issue.visible
+             .joins(
+               "JOIN #{Issue.table_name} ancestors" \
+               " ON ancestors.root_id = #{Issue.table_name}.root_id" \
+               " AND ancestors.lft < #{Issue.table_name}.lft" \
+               " AND ancestors.rgt > #{Issue.table_name}.rgt"
+             )
+             .where(ancestors: { id: ancestor_ids })
+             .select("#{Issue.table_name}.*", "ancestors.id AS ancestor_id")
+             .order("#{Issue.table_name}.lft")
+             .preload(:status, :tracker, :assigned_to, :priority)
+             .to_a
+             .group_by { |issue| issue.read_attribute(:ancestor_id) }
       end
 
       def build_type_breakdown(issues)

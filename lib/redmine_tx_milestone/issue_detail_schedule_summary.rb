@@ -23,18 +23,20 @@ module RedmineTxMilestone
     def build
       input_issue_ids = [root_issue.id]
       parent_issues = [root_issue]
+      descendant_ids = root_issue.descendants.pluck(:id)
       version_markers = build_version_markers(parent_issues)
       main_issue_colors = build_main_issue_colors(parent_issues)
-      issue_to_main_issue = build_issue_to_main_issue(parent_issues)
+      issue_to_main_issue = build_issue_to_main_issue(parent_issues, descendant_ids)
 
-      all_issues = visible_related_issues(input_issue_ids, parent_issues)
-      filtered_issues = scheduled_display_issues(all_issues)
-      filtered_all_issues = implementation_issues(all_issues)
+      all_issues = visible_related_issues(input_issue_ids, descendant_ids)
+      # 동일 relation의 반복 실행(maximum/group_by/pluck/size마다 쿼리)을 막기 위해 한 번만 로드
+      filtered_issue_list = scheduled_display_issues(all_issues).to_a
+      assigned_issue_list = filtered_issue_list.select(&:assigned_to_id)
       timeline_start_date = display_start_date
-      timeline_end_date = (filtered_issues.maximum(:due_date) || Date.today) + 60.days
+      timeline_end_date = (filtered_issue_list.filter_map(&:due_date).max || Date.today) + 60.days
       holidays = holidays_for(timeline_start_date, timeline_end_date)
-      result_data, users = grouped_user_issues(filtered_issues)
-      background_issues_by_user = background_issues_for(users.keys, filtered_issues, timeline_start_date)
+      result_data, users = grouped_user_issues(assigned_issue_list)
+      background_issues_by_user = background_issues_for(users.keys, assigned_issue_list, timeline_start_date)
 
       {
         root_issue: root_issue,
@@ -48,8 +50,8 @@ module RedmineTxMilestone
         full_day_vacation_map: full_day_vacation_map(result_data, timeline_start_date, timeline_end_date),
         result_data: result_data,
         background_issues_by_user: background_issues_by_user,
-        total_issue_count: filtered_all_issues.size,
-        summarized_issue_count: filtered_issues.where.not(assigned_to_id: nil).size
+        total_issue_count: implementation_issues(all_issues).size,
+        summarized_issue_count: assigned_issue_list.size
       }
     end
 
@@ -79,20 +81,17 @@ module RedmineTxMilestone
       end
     end
 
-    def build_issue_to_main_issue(parent_issues)
+    def build_issue_to_main_issue(parent_issues, descendant_ids)
       parent_issues.each_with_object({}) do |parent_issue, mapping|
         mapping[parent_issue.id] = parent_issue.id
-        parent_issue.descendants.pluck(:id).each do |descendant_id|
+        descendant_ids.each do |descendant_id|
           mapping[descendant_id] = parent_issue.id
         end
       end
     end
 
-    def visible_related_issues(input_issue_ids, parent_issues)
-      all_issue_ids = Set.new(input_issue_ids)
-      parent_issues.each { |parent_issue| all_issue_ids.merge(parent_issue.descendants.pluck(:id)) }
-
-      Issue.visible.where(id: all_issue_ids.to_a)
+    def visible_related_issues(input_issue_ids, descendant_ids)
+      Issue.visible.where(id: (input_issue_ids + descendant_ids).uniq)
     end
 
     def scheduled_display_issues(all_issues)
@@ -124,14 +123,14 @@ module RedmineTxMilestone
       []
     end
 
-    def grouped_user_issues(filtered_issues)
-      issues_by_user = filtered_issues.where.not(assigned_to_id: nil).group_by(&:assigned_to_id)
+    def grouped_user_issues(assigned_issue_list)
+      issues_by_user = assigned_issue_list.group_by(&:assigned_to_id)
       users = User.where(id: issues_by_user.keys.compact).index_by(&:id)
       registered_user_ids = Set.new
       result_data = {}
 
       groups_to_show.each do |group|
-        group_user_ids = group.users.pluck(:id)
+        group_user_ids = group.users.map(&:id)
         group_users_issues = {}
 
         group_user_ids.each do |user_id|
@@ -156,23 +155,22 @@ module RedmineTxMilestone
 
     def groups_to_show
       excluded_group_ids = Array(TxBaseHelper.config_arr('e_group')).map(&:to_i)
-      Group.all.reject { |group| excluded_group_ids.include?(group.id) }
+      Group.includes(:users).reject { |group| excluded_group_ids.include?(group.id) }
     end
 
-    def background_issues_for(user_ids, filtered_issues, timeline_start_date)
-      displayed_issue_ids = filtered_issues.where.not(assigned_to_id: nil).pluck(:id).to_set
+    def background_issues_for(user_ids, assigned_issue_list, timeline_start_date)
+      return {} if user_ids.empty?
 
-      user_ids.each_with_object({}) do |user_id, background_map|
-        other_issues = Issue.visible
-                            .where(assigned_to_id: user_id)
-                            .where.not(id: displayed_issue_ids.to_a)
-                            .where.not(start_date: nil)
-                            .where.not(due_date: nil)
-                            .where.not(tracker_id: excluded_tracker_ids)
-                            .where('start_date >= ? OR due_date >= ?', timeline_start_date, timeline_start_date)
+      displayed_issue_ids = assigned_issue_list.map(&:id)
 
-        background_map[user_id] = other_issues.to_a if other_issues.any?
-      end
+      Issue.visible
+           .where(assigned_to_id: user_ids)
+           .where.not(id: displayed_issue_ids)
+           .where.not(start_date: nil)
+           .where.not(due_date: nil)
+           .where.not(tracker_id: excluded_tracker_ids)
+           .where('start_date >= ? OR due_date >= ?', timeline_start_date, timeline_start_date)
+           .group_by(&:assigned_to_id)
     end
 
     def full_day_vacation_map(result_data, timeline_start_date, timeline_end_date)

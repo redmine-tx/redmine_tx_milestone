@@ -5,32 +5,32 @@
     
     <div class="milestone-features">
       <div class="feature-item">
-        <h4><%= link_to '📊 간트차트', '/projects/' + params[:project_id].to_s + '/milestone/gantt', class: 'feature-link' %></h4>
+        <h4><%= link_to '📊 간트차트', gantt_project_milestone_index_path(@project), class: 'feature-link' %></h4>
         <p>프로젝트의 일정과 작업 간의 의존관계를 시각적으로 표현하여 전체 프로젝트 흐름을 한눈에 파악할 수 있습니다. 작업 순서와 중요 경로를 명확히 확인할 수 있습니다.</p>
       </div>
 
       <div class="feature-item">
-        <h4><%= link_to '📋 일정요약', '/projects/' + params[:project_id].to_s + '/milestone/schedule_summary', class: 'feature-link' %></h4>
+        <h4><%= link_to '📋 일정요약', schedule_summary_project_milestone_index_path(@project), class: 'feature-link' %></h4>
         <p>메인 일감들의 전체적인 일정 현황을 타임라인으로 요약하여 보여줍니다.</p>
       </div>
 
       <div class="feature-item">
-        <h4><%= link_to '👥 작업현황 (부서)', '/projects/' + params[:project_id].to_s + '/milestone/group_detail', class: 'feature-link' %></h4>
+        <h4><%= link_to '👥 작업현황 (부서)', group_detail_project_milestone_index_path(@project), class: 'feature-link' %></h4>
         <p>부서별 작업 배분과 진행 현황을 실시간으로 모니터링합니다. 각 부서의 업무량, 완료율, 지연 상황을 한눈에 확인하여 리소스 배분을 최적화할 수 있습니다.</p>
       </div>
 
       <div class="feature-item">
-        <h4><%= link_to '🔧 검증도구', '/projects/' + params[:project_id].to_s + '/milestone/tools', class: 'feature-link' %></h4>
+        <h4><%= link_to '🔧 검증도구', tools_project_milestone_index_path(@project), class: 'feature-link' %></h4>
         <p>프로젝트 일관성을 유지하기 위한 검증 도구 모음입니다. 부모와 자식 일감의 목표버전 불일치 일감 관리, 상위-하위 일감 간의 불일치 일정 동기화 등을 통해 프로젝트 데이터의 정확성을 보장합니다.</p>
       </div>
 
       <div class="feature-item">
-        <h4><%= link_to '⚡ 일정 자동 배치', '/projects/' + params[:project_id].to_s + '/milestone/tetris', class: 'feature-link' %></h4>
+        <h4><%= link_to '⚡ 일정 자동 배치', tetris_project_milestone_index_path(@project), class: 'feature-link' %></h4>
         <p>일감에 추정 작업 시간만 기입해 두면 작업 간의 의존관계와 리소스 가용성을 고려하여 최적의 일정을 자동으로 계산하고 배치합니다. 프로젝트 전체의 효율성을 극대화하고 병목 구간을 최소화합니다.</p>
       </div>
 
       <div class="feature-item">
-        <h4><%= link_to '🔍 일감 통계', '/projects/' + params[:project_id].to_s + '/milestone/report', class: 'feature-link' %></h4>
+        <h4><%= link_to '🔍 일감 통계', report_project_milestone_index_path(@project), class: 'feature-link' %></h4>
         <p>프로젝트의 일감 진행 상황을 다양한 지표로 분석한 통계를 제공합니다. 상태별, 담당자별 일감 분포 및 완료 추이를 확인하여 프로젝트 관리에 필요한 데이터 기반의 의사결정을 지원합니다.</p>
       </div>
     </div>
@@ -41,16 +41,6 @@
     </div>
   </div>
 </div>
-
-<% if defined?(RubyVM) && defined?(RubyVM::YJIT) && RubyVM::YJIT.enabled? %>
-  <div class="yjit-status">
-    <span class="status-badge enabled">✅ YJIT enabled</span>
-  </div>
-<% else %>
-  <div class="yjit-status">
-    <span class="status-badge disabled">❌ YJIT disabled</span>
-  </div>
-<% end %>
 
 <style>
 .milestone-welcome {
@@ -129,32 +119,6 @@
   color: #004085;
   margin: 0;
   font-weight: 500;
-}
-
-.yjit-status {
-  margin: 20px 0;
-  text-align: right;
-}
-
-.status-badge {
-  display: inline-block;
-  padding: 8px 16px;
-  border-radius: 20px;
-  font-weight: 500;
-  font-size: 0.9em;
-  letter-spacing: 0.5px;
-}
-
-.status-badge.enabled {
-  background: linear-gradient(135deg, #28a745, #20c997);
-  color: white;
-  box-shadow: 0 2px 8px rgba(40, 167, 69, 0.3);
-}
-
-.status-badge.disabled {
-  background: linear-gradient(135deg, #6c757d, #495057);
-  color: white;
-  box-shadow: 0 2px 8px rgba(108, 117, 125, 0.3);
 }
 
 @media (max-width: 768px) {

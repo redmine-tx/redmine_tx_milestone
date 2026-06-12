@@ -18,6 +18,9 @@
   </div>
 </div>
 
+<%# chart.js는 CDN 대신 플러그인 asset으로 로컬 서빙 (버전 고정 4.4.9) %>
+<%= javascript_include_tag 'chart.umd.min', plugin: 'redmine_tx_milestone' %>
+
 <!-- BUG 타입 추이 그래프 -->
 <div style="margin-top: 30px;">
     <h3>BUG 해결 추이</h3>
@@ -187,6 +190,9 @@
                 const legendContainer = document.getElementById('customLegend');
                 if (!legendContainer) return;
 
+                // 카테고리명(DB 값)을 innerHTML에 넣으므로 반드시 이스케이프 (XSS 방지)
+                const escapeHtml = (s) => String(s).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+
                 const total = data.reduce((sum, v) => sum + Number(v || 0), 0);
                 
                 // 범례 헤더 스타일
@@ -228,8 +234,8 @@
                     const value = Number(data[i] || 0);
                     const percent = total ? (value / total * 100) : 0;
                     const color = colors[i % colors.length];
-                    const labelText = (label !== undefined && label !== null && label !== '') ? String(label) : '미정';
-                    
+                    const labelText = escapeHtml((label !== undefined && label !== null && label !== '') ? String(label) : '미정');
+
                     legendHTML += `
                         <div style="${itemStyle}" data-index="${i}">
                             <div style="
@@ -277,7 +283,7 @@
                 renderPie();
             } else {
                 const script = document.createElement('script');
-                script.src = 'https://cdn.jsdelivr.net/npm/chart.js';
+                script.src = '<%= asset_path('plugin_assets/redmine_tx_milestone/chart.umd.min.js') %>';
                 script.onload = renderPie;
                 document.head.appendChild(script);
             }
@@ -295,23 +301,21 @@
     <h3>담당자별 미해결 BUG 현황</h3>
     
     <%
-      # 버그 유형 tracker_id 목록
-      bug_ids = Tracker.where(is_bug: true).pluck(:id)
-      
-      # 모든 버전 이름 수집 및 총합 계산
+      # 모든 버전 ID 수집 및 총합 계산 (키는 fixed_version_id — Integer 또는 nil(미분류))
       all_versions = @rest_bug_issues.values.flat_map(&:keys).uniq.sort_by { |version| version.to_i }
       grand_total = @rest_bug_issues.values.sum { |versions| versions.values.sum }
-      
+      version_names = Version.where(id: all_versions.compact).pluck(:id, :name).to_h
+
       # 각 버전별 총합 계산 및 5% 이상인 버전만 필터링
       significant_versions = all_versions.select do |version|
         version_total = @rest_bug_issues.values.sum { |versions| versions[version] || 0 }
         (version_total.to_f / grand_total * 100) >= 5.0
       end
-      
-      # '미분류'가 significant_versions에 있으면 맨 뒤로 이동
-      if significant_versions.include?('미분류')
-        significant_versions.delete('미분류')
-        significant_versions << '미분류'
+
+      # 미분류(nil) 컬럼은 맨 뒤로 이동
+      if significant_versions.include?(nil)
+        significant_versions.delete(nil)
+        significant_versions << nil
       end
     %>
     
@@ -330,7 +334,7 @@
             <tr>
                  <th>담당자</th>
                  <% significant_versions.each do |version_id| %>
-                     <th><%= version_id ? Version.find(version_id).name : '미분류' %></th>
+                     <th><%= version_id ? (version_names[version_id] || "Version##{version_id}") : '미분류' %></th>
                  <% end %>
                  <% if (all_versions - significant_versions).any? %>
                      <th>기타</th>
@@ -351,20 +355,8 @@
              <!-- 상위 10위 표시 -->
              <% top_10.each do |assignee, versions| %>
                 <tr>
-                     <td><strong>
-                         <% if assignee %>
-                             <% if assignee.is_a?(Principal) %>
-                                 <%= link_to_principal(assignee) %>
-                             <% elsif assignee.is_a?(Integer) %>
-                                 <% user = User.find_by(id: assignee) %>
-                                 <%= user ? link_to_principal(user) : "User##{assignee}" %>
-                             <% else %>
-                                 <%= assignee.to_s %>
-                             <% end %>
-                         <% else %>
-                             미지정
-                         <% end %>
-                     </strong></td>
+                     <%# 컨트롤러에서 키를 User 객체(또는 nil)로 변환해 두므로 타입 분기가 필요 없음 %>
+                     <td><strong><%= assignee ? link_to_principal(assignee) : '미지정' %></strong></td>
                     <% 
                         # 표시되는 버전들의 개수만 계산
                         displayed_row_total = 0
@@ -448,20 +440,7 @@
                  <!-- 기타 그룹의 개별 담당자들 (기본적으로 숨김) -->
                  <% others.each_with_index do |(assignee, versions), index| %>
                      <tr class="others-detail-row" style="display: none; background-color: #fafafa;">
-                         <td style="padding-left: 20px;">
-                             <% if assignee %>
-                                 <% if assignee.is_a?(Principal) %>
-                                     <%= link_to_principal(assignee) %>
-                                 <% elsif assignee.is_a?(Integer) %>
-                                     <% user = User.find_by(id: assignee) %>
-                                     <%= user ? link_to_principal(user) : "User##{assignee}" %>
-                                 <% else %>
-                                     <%= assignee.to_s %>
-                                 <% end %>
-                             <% else %>
-                                 미지정
-                             <% end %>
-                         </td>
+                         <td style="padding-left: 20px;"><%= assignee ? link_to_principal(assignee) : '미지정' %></td>
                          <% significant_versions.each do |version| %>
                              <% 
                                  count = versions[version] || 0
@@ -571,45 +550,10 @@ function toggleOthersRows() {
 }
 </script>
 
-<script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
 <script>
 // BUG 데이터 준비
 <%
-  # 오늘의 잔여 버그 개수
-  today_remaining_bugs = @rest_issue_count_per_category['BUG'] || 0
-  
-  bug_data = []
-  remaining_bugs = today_remaining_bugs
-  
-  @issues_by_days.each do |day_data|
-    bug_category = day_data[:issues_by_category]['BUG']
-    created = bug_category ? bug_category[:created] : 0
-    completed = bug_category ? bug_category[:completed] : 0
-
-    # 날짜 타입 확인 (토요일, 일요일, 공휴일, 평일)
-    date = day_data[:day]
-    date_type = if TxBaseHelper::HolidayApi.available? && TxBaseHelper::HolidayApi.holiday?(date)
-                  'holiday'
-                elsif date.sunday?
-                  'sunday'
-                elsif date.saturday?
-                  'saturday'
-                else
-                  'weekday'
-                end
-
-    bug_data << {
-      date: date.strftime('%m-%d'),
-      created: created,
-      completed: completed,
-      remaining: remaining_bugs,
-      date_type: date_type
-    }
-
-    # 한 단계 과거로 이동: 오늘 기준 잔여에서 (그 날 해결 수)를 더하고 (그 날 생성 수)를 뺌
-    remaining_bugs = remaining_bugs + completed - created
-  end
-  bug_data.reverse!
+  bug_data = milestone_bug_trend_data(@issues_by_days, @rest_issue_count_per_category)
 %>
 
 const bugData = <%= raw bug_data.to_json %>;

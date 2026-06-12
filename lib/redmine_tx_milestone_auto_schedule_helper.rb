@@ -52,7 +52,10 @@ module RedmineTxMilestoneAutoScheduleHelper
         #   - :no_estimated_hours_issues - 예상 시간이 없는 일감
         def self.analyze_user_schedule(user_id)
           valid_status_ids = ( IssueStatus.in_progress_ids + IssueStatus.new_ids ).uniq
-          issues = Issue.where( assigned_to_id: user_id ).where( status_id: valid_status_ids )
+          issues = Issue.visible
+                        .where( assigned_to_id: user_id )
+                        .where( status_id: valid_status_ids )
+                        .includes( :fixed_version, :priority, :custom_values, :relations_from, :relations_to )
           analyze_issues_schedule(issues)
         end
 
@@ -67,20 +70,31 @@ module RedmineTxMilestoneAutoScheduleHelper
         #   - :no_estimated_hours_issues - 예상 시간이 없는 일감
         def self.analyze_parent_schedule(parent_issue_id)
           valid_status_ids = ( IssueStatus.in_progress_ids + IssueStatus.new_ids ).uniq
-          
+
           # 부모+자식 일감을 related_issues에 정리
-          parent_issue = Issue.find( parent_issue_id )
-          related_issues = parent_issue.self_and_descendants.where(status_id: valid_status_ids).to_a
+          parent_issue = Issue.visible.find( parent_issue_id )
+          related_issues = parent_issue.self_and_descendants.visible
+                                       .where(status_id: valid_status_ids)
+                                       .includes( :fixed_version, :priority, :custom_values, :relations_from, :relations_to )
+                                       .to_a
 
           # 관련자들의 기타 일정 확정된 이슈를 모두 얻어온다.
-          assigned_to_ids = related_issues.map { |issue| issue.assigned_to }.uniq
-          etc_blocked_issues = Issue.where( assigned_to_id: assigned_to_ids )
-                                    .where( status_id: valid_status_ids )
-                                    .where.not( start_date: nil )
-                                    .where.not( due_date: nil )
-                                    .order( assigned_to_id: :desc )
-          etc_blocked_issues = etc_blocked_issues.select { |issue| !related_issues.include?( issue ) }
-          
+          # (nil을 포함하면 시스템 전체의 미배정 일감을 끌어오므로 담당자 있는 일감만)
+          assigned_to_ids = related_issues.map(&:assigned_to_id).compact.uniq
+          etc_blocked_issues = if assigned_to_ids.any?
+                                 Issue.visible
+                                      .where( assigned_to_id: assigned_to_ids )
+                                      .where( status_id: valid_status_ids )
+                                      .where.not( start_date: nil )
+                                      .where.not( due_date: nil )
+                                      .where.not( id: related_issues.map(&:id) )
+                                      .includes( :fixed_version, :priority, :custom_values, :relations_from, :relations_to )
+                                      .order( assigned_to_id: :desc )
+                                      .to_a
+                               else
+                                 []
+                               end
+
           issues = ( related_issues + etc_blocked_issues ).uniq
           analyze_issues_schedule(issues)
         end
@@ -187,8 +201,9 @@ module RedmineTxMilestoneAutoScheduleHelper
         def self.analyze_issues_schedule(issues)
           info = {}
           exception_tracker_ids = ( Tracker.sidejob_trackers_ids + Tracker.bug_trackers_ids + Tracker.exception_trackers_ids + Tracker.roadmap_trackers_ids ).uniq
-      
-          info[:all_issues] = issues.select{ |i| !exception_tracker_ids.include?( i.tracker_id ) && ( IssueStatus.in_progress_ids + IssueStatus.new_ids ).uniq.include?( i.status_id ) }
+          valid_status_ids = ( IssueStatus.in_progress_ids + IssueStatus.new_ids ).uniq
+
+          info[:all_issues] = issues.select{ |i| !exception_tracker_ids.include?( i.tracker_id ) && valid_status_ids.include?( i.status_id ) }
           
           # 일정이 확정된 일감
           info[:fixed_issues] = info[:all_issues].select { |issue| issue.is_in_progress? || (issue.start_date.present? && issue.due_date.present? ) }
@@ -222,32 +237,34 @@ module RedmineTxMilestoneAutoScheduleHelper
               blocking[issue] = []
             end
             
+            issues_by_id = issues.index_by(&:id)
+
             # 모든 관계를 수집하고 위상정렬에 사용할 의존관계 구축
             issues.each do |issue|
               issue.relations.each do |relation|
                 # 관계의 상대방 이슈가 정렬 대상에 포함되어야 함
                 other_issue = nil
                 issue_first = false
-                
+
                 # 관계 타입에 따른 선후 관계 결정
                 case relation.relation_type
                 when 'precedes', 'blocks'
                   # A precedes/blocks B: A가 먼저 처리되어야 함
                   if relation.issue_from_id == issue.id
-                    other_issue = issues.find { |i| i.id == relation.issue_to_id }
+                    other_issue = issues_by_id[relation.issue_to_id]
                     issue_first = true
                   elsif relation.issue_to_id == issue.id
-                    other_issue = issues.find { |i| i.id == relation.issue_from_id }
+                    other_issue = issues_by_id[relation.issue_from_id]
                     issue_first = false
                   end
-                  
+
                 when 'follows', 'blocked'
                   # A follows/blocked by B: B가 먼저 처리되어야 함
                   if relation.issue_from_id == issue.id
-                    other_issue = issues.find { |i| i.id == relation.issue_to_id }
+                    other_issue = issues_by_id[relation.issue_to_id]
                     issue_first = false
                   elsif relation.issue_to_id == issue.id
-                    other_issue = issues.find { |i| i.id == relation.issue_from_id }
+                    other_issue = issues_by_id[relation.issue_from_id]
                     issue_first = true
                   end
                 end
@@ -468,9 +485,13 @@ module RedmineTxMilestoneAutoScheduleHelper
         end
     
         # 차단 관계 확인
-        def is_blocking?( issue )
+        # visited: 관계 데이터에 사이클이 있어도 무한 재귀하지 않도록 방문 추적
+        def is_blocking?( issue, visited = Set.new )
+          return false if visited.include?(self.id)
+          visited << self.id
+
           return true if self.relations.select { |r| ( r.relation_type == 'blocks' || r.relation_type == 'precedes' ) && r.issue_to_id == issue.id && r.issue_from_id == self.id }.any?
-          return true if follow_issues.any? { |issue| self.is_blocking?(issue) }
+          return true if follow_issues.any? { |follow_issue| follow_issue.is_blocking?(issue, visited) }
           false
         end
 
@@ -518,13 +539,12 @@ module RedmineTxMilestoneAutoScheduleHelper
           #pp [ 'START latest_predecessor_end_date', self.id, predecessor_issue_ids ]
           
           if predecessor_issue_ids.any?
+            cache_by_id = issues_cache ? issues_cache.index_by(&:id) : {}
+            missing_ids = predecessor_issue_ids.reject { |id| cache_by_id.key?(id) }
+            cache_by_id = cache_by_id.merge(Issue.where(id: missing_ids).index_by(&:id)) if missing_ids.any?
+
             # 선행 일감들의 완료일 중 가장 늦은 날짜 반환
-            latest_dates = predecessor_issue_ids.map { |id|
-              in_list = issues_cache&.find { |i| i.id == id }
-              predecessor_issue = in_list ? in_list : Issue.find(id)
-              #pp [ 'predecessor_issue', id, in_list ? 'in_list' : 'not_in_list', predecessor_issue.due_date ]
-              predecessor_issue.due_date
-            }.compact
+            latest_dates = predecessor_issue_ids.filter_map { |id| cache_by_id[id]&.due_date }
 
             latest_date = latest_dates.max
 

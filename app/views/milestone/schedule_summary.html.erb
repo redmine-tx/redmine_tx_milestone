@@ -1,8 +1,8 @@
 <%= render 'milestone/header' %>
 
 <% content_for :header_tags do %>
-  <!-- ExcelJS 라이브러리 -->
-  <script src="https://cdnjs.cloudflare.com/ajax/libs/exceljs/4.3.0/exceljs.min.js"></script>
+  <!-- ExcelJS 라이브러리 (CDN 대신 플러그인 asset으로 로컬 서빙, 4.3.0) -->
+  <%= javascript_include_tag 'exceljs.min', plugin: 'redmine_tx_milestone' %>
   
   <!-- TX XLSX Exporter (공용 엑셀 익스포터) -->
   <%= javascript_include_tag 'tx_xlsx_exporter', plugin: 'redmine_tx_0_base' %>
@@ -229,7 +229,8 @@ selected_group_ids = schedule_summary_group_ids
 groups_to_show = schedule_summary_groups_to_show
 group_user_mapping = {}
 groups_to_show.each do |group|
-  group_user_mapping[group] = group.users.pluck(:id)
+  # schedule_summary_all_groups가 users를 미리 로드하므로 pluck(그룹당 1쿼리) 대신 map 사용
+  group_user_mapping[group] = group.users.map(&:id)
 end
 selected_team_user_ids = group_user_mapping.values.flatten.uniq
 has_explicit_group_param = params.key?(:group_ids) || params.key?('group_ids')
@@ -245,7 +246,11 @@ end
   <%
   # 표기 시작일 파싱
   default_display_start_date = 2.months.ago.to_date
-  display_start_date = params[:display_start_date].present? ? Date.parse(params[:display_start_date]) : default_display_start_date
+  display_start_date = begin
+    params[:display_start_date].present? ? Date.parse(params[:display_start_date]) : default_display_start_date
+  rescue ArgumentError
+    default_display_start_date
+  end
 
   if summary_mode == 'team'
     input_issue_ids = []
@@ -255,18 +260,18 @@ end
     # 일감 ID 파싱 (쉼표, 세미콜론, 공백으로 분리)
     input_issue_ids = params[:issue_ids].to_s.split(/[,;\s]+/).map(&:strip).reject(&:empty?).map(&:to_i).uniq
 
-    # 입력된 일감들과 연관된 일감들 조회
-    input_issues = Issue.where(id: input_issue_ids)
-    parent_issues = input_issues.map(&:root).uniq
+    # 입력된 일감들과 연관된 일감들 조회 (가시성 스코프 필수 — 임의 ID 입력 가능)
+    input_issues = Issue.visible.where(id: input_issue_ids).to_a
+    parent_issues = Issue.visible.where(id: input_issues.map(&:root_id).uniq).to_a
 
-    # 모든 하위 일감 포함 (descendants)
-    all_issue_ids = Set.new(input_issue_ids)
-    parent_issues.each do |issue|
-      all_issue_ids.merge(issue.descendants.pluck(:id))
-    end
+    # 모든 하위 일감 포함 — parent_issues는 루트이므로 root_id 단일 쿼리로 하위 트리 전체를 가져옴
+    all_issue_ids = Set.new(input_issues.map(&:id))
+    all_issue_ids.merge(
+      Issue.visible.where(root_id: parent_issues.map(&:id)).where.not(id: parent_issues.map(&:id)).pluck(:id)
+    )
 
     # 전체 일감 조회
-    all_issues = Issue.where(id: all_issue_ids.to_a)
+    all_issues = Issue.visible.where(id: all_issue_ids.to_a)
   end
 
   # 메인 일감별 색상 팔레트 정의
@@ -299,13 +304,12 @@ end
 
   filtered_issues = filtered_issues.where.not(tracker_id: excluded_tracker_ids)
 
+  # 동일 relation의 반복 실행(each/maximum/pluck마다 쿼리)을 막기 위해 한 번만 로드
+  filtered_issue_list = filtered_issues.to_a
+
   if summary_mode == 'team'
-    top_issue_by_id = {}
-    filtered_issues.each do |issue|
-      root_issue = issue.root
-      top_issue_by_id[root_issue.id] ||= root_issue
-    end
-    parent_issues = top_issue_by_id.values.sort_by(&:id)
+    # 일감마다 issue.root(쿼리)를 부르지 않고 root_id로 일괄 조회
+    parent_issues = Issue.visible.where(id: filtered_issue_list.map(&:root_id).uniq).sort_by(&:id)
   else
     parent_issues = parent_issues.uniq { |issue| issue.id }
   end
@@ -332,16 +336,16 @@ end
   # 각 일감이 어떤 메인 일감에 속하는지 매핑 (일감 ID -> 메인 일감 ID)
   issue_to_main_issue = {}
   if summary_mode == 'team'
-    filtered_issues.each do |issue|
-      issue_to_main_issue[issue.id] = issue.root.id
+    # root_id는 컬럼이므로 issue.root(일감당 1쿼리) 대신 직접 사용
+    filtered_issue_list.each do |issue|
+      issue_to_main_issue[issue.id] = issue.root_id
     end
   else
-    parent_issues.each do |main_issue|
-      # 메인 일감 자신
-      issue_to_main_issue[main_issue.id] = main_issue.id
-      # 하위 일감들
-      main_issue.descendants.each do |descendant|
-        issue_to_main_issue[descendant.id] = main_issue.id
+    parent_issues.each { |main_issue| issue_to_main_issue[main_issue.id] = main_issue.id }
+    # 부모별 descendants 반복 조회 대신 root_id 기반 단일 쿼리 (parent_issues는 루트)
+    if parent_issues.any?
+      Issue.where(root_id: parent_issues.map(&:id)).pluck(:id, :root_id).each do |issue_id, root_id|
+        issue_to_main_issue[issue_id] = root_id
       end
     end
   end
@@ -349,7 +353,7 @@ end
   # 공휴일 데이터 수집 (타임라인 표시 범위)
   # 타임라인 시작일: display_start_date, 종료일: 필터링된 일감들의 최대 완료일 + 여유(60일)
   timeline_start_date = display_start_date
-  max_due_date = filtered_issues.maximum(:due_date) || Date.today
+  max_due_date = filtered_issue_list.filter_map(&:due_date).max || Date.today
   timeline_end_date = max_due_date + 60.days
 
   # 공휴일 조회
@@ -367,8 +371,8 @@ end
                                   .where.not(status_id: IssueStatus.discarded_ids)
   
   # 사용자별 일감 그룹핑 (담당자가 있고 일정이 있는 것만)
-  issues_by_user = filtered_issues.where.not(assigned_to_id: nil).group_by(&:assigned_to_id)
-  
+  issues_by_user = filtered_issue_list.select(&:assigned_to_id).group_by(&:assigned_to_id)
+
   # 사용자 정보 미리 로드
   user_ids = issues_by_user.keys.compact
   users = User.where(id: user_ids).index_by(&:id)
@@ -421,24 +425,20 @@ end
   
   # 각 사용자별 다른 미완료 일감 조회 (배경 표시용)
   # 현재 표시된 일감 ID 집합
-  displayed_issue_ids = filtered_issues.where.not(assigned_to_id: nil).pluck(:id).to_set
-  
-  # 미완료 상태 ID 조회 (is_closed가 false인 상태)
-  open_status_ids = IssueStatus.where(is_closed: false).pluck(:id)
-  
-  # 사용자별 다른 미완료 일감 (배경 일정)
-  background_issues_by_user = {}
-  user_ids.each do |user_id|
-    # 해당 사용자의 미완료 일감 중 표시 범위 내에 있는 것
-    other_issues = Issue.where(assigned_to_id: user_id)
-                        #.where(status_id: open_status_ids)
-                        .where.not(id: displayed_issue_ids.to_a)
-                        .where.not(start_date: nil)
-                        .where.not(due_date: nil)
-                        .where.not(tracker_id: excluded_tracker_ids)
-                        .where("start_date >= ? OR due_date >= ?", display_start_date, display_start_date)
-    
-    background_issues_by_user[user_id] = other_issues.to_a if other_issues.any?
+  displayed_issue_ids = filtered_issue_list.select(&:assigned_to_id).map(&:id)
+
+  # 사용자별 다른 일감 (배경 일정) — 사용자당 1쿼리 대신 단일 쿼리 + 가시성 스코프
+  background_issues_by_user = if user_ids.any?
+    Issue.visible
+         .where(assigned_to_id: user_ids)
+         .where.not(id: displayed_issue_ids)
+         .where.not(start_date: nil)
+         .where.not(due_date: nil)
+         .where.not(tracker_id: excluded_tracker_ids)
+         .where("start_date >= ? OR due_date >= ?", display_start_date, display_start_date)
+         .group_by(&:assigned_to_id)
+  else
+    {}
   end
   
   # 배제된 일감들 분류
@@ -563,11 +563,11 @@ end
         선택된 팀: <strong><%= selected_group_ids.any? ? groups_to_show.size : all_groups.size %>개</strong> |
         구성원: <strong><%= selected_team_user_ids.size %>명</strong> |
         전체 일감 (실제 구현 일감만): <strong><%= filtered_all_issues.size %>개</strong> |
-        요약된 일감 (일정 있음): <strong><%= filtered_issues.where.not(assigned_to_id: nil).size %>개</strong>
+        요약된 일감 (일정 있음): <strong><%= filtered_issue_list.count(&:assigned_to_id) %>개</strong>
       <% else %>
         입력된 일감: <strong><%= input_issue_ids.size %>개</strong> |
         전체 일감 (하위 포함, 실제 구현 일감만): <strong><%= filtered_all_issues.size %>개</strong> |
-        요약된 일감 (담당자/일정 있음): <strong><%= filtered_issues.where.not(assigned_to_id: nil).size %>개</strong>
+        요약된 일감 (담당자/일정 있음): <strong><%= filtered_issue_list.count(&:assigned_to_id) %>개</strong>
       <% end %>
     </p>
   </div>

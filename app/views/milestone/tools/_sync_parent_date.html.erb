@@ -149,32 +149,31 @@
   </div>
 
   <%
-  # 프로젝트 ID 조회
-  pid = Project.find_by(name: params[:project_id])&.id
-  
-  versions = Version.includes(:project)
-                     .where(project_id: pid)
-                     .index_by(&:id)
+  tracker_ids = Tracker.where( is_in_roadmap: true ).pluck(:id)
 
-  tacerk_ids = Tracker.where( is_in_roadmap: true ).pluck(:id)
-  
-  parent_issues = Issue.where( project_id: pid )
-                      .where( tracker_id: tacerk_ids )
+  parent_issues = Issue.visible
+                      .where( project_id: @project.id )
+                      .where( tracker_id: tracker_ids )
                       .where.not( due_date: nil )
                       .open
+                      .includes( :fixed_version )
                       .select { |parent| parent.fixed_version_id && parent.fixed_version.effective_date && parent.fixed_version.effective_date > Date.today - 2.month }
-  
+
+  # 부모별 descendants 조회(부모당 1쿼리)를 단일 쿼리로 일괄 처리
+  descendants_by_ancestor_id = RedmineTxMilestone::SummaryService.descendants_by_ancestor(parent_issues)
+  discarded_status_ids = IssueStatus.discarded_ids
+
   all_issues = parent_issues.map { |parent|
-      invalid_child_issues = parent.descendants.select { |child|
+      invalid_child_issues = Array(descendants_by_ancestor_id[parent.id]).select { |child|
           child.start_date.present? && child.due_date.present? &&
           ( parent.due_date == nil || child.due_date > parent.due_date ) &&
-          child.status_id && !child.status.is_discarded?
+          child.status_id && !discarded_status_ids.include?(child.status_id)
         }
 
      [ parent, invalid_child_issues ]
   }.select { |pair| pair[1].size > 0 }
-  
-  if parent_issues.empty? %>
+
+  if all_issues.empty? %>
     <p>자식과 일정이 불일치하는 일감이 없습니다.</p>
   <% else %>
     <% all_issues.each do |pair| %>

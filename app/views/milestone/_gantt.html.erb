@@ -1,26 +1,7 @@
-<% if params[:issue_id] %>
-    <%
-        def push_issue_recursive( issues, issue )
-            issues.push issue
-            childs = issue.children
-            childs.each do |child|
-                next if IssueStatus.is_discarded?( child.status_id )
-                push_issue_recursive( issues, child )
-            end
-        end
-        
-        issues = []
-        main_issue = Issue.find( params[:issue_id] )
-        push_issue_recursive( issues, main_issue )
-        version = main_issue.fixed_version
+<% if @gantt_issue %>
+    <% html_title("##{@gantt_issue.id} [#{@gantt_issue.tracker.name}] #{@gantt_issue.subject.to_s}") %>
 
-        # date_marks = main_issue.custom_field_values.select { |v| v.custom_field.field_format == 'date' && v.value.present? }.map { |v| [ v.custom_field.name, Date.parse( v.value ) ] }
-
-        due_date = main_issue.fixed_version ? main_issue.fixed_version.effective_date : main_issue.due_date
-    %>
-    <% html_title("##{main_issue.id} [#{main_issue.tracker.name}] #{main_issue.subject.to_s}") %>
-
-    <%= render :partial => 'milestone/gantt_chart', locals: { title: '주요 일감', issues: issues, due_date:due_date, date_marks: version.marks, gantt_opts: { show_status_history: false } } %>
+    <%= render :partial => 'milestone/gantt_chart', locals: { title: '주요 일감', issues: @gantt_issues, due_date: @gantt_due_date, date_marks: @gantt_issue.fixed_version&.marks || [], gantt_opts: { show_status_history: false } } %>
 
 <% else %>
     <%= render :partial => 'milestone/versions' %>

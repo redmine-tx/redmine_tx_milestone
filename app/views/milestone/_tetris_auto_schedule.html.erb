@@ -46,7 +46,7 @@
         var userIdInput = document.createElement('input');
         userIdInput.type = 'hidden';
         userIdInput.name = 'user_id';
-        userIdInput.value = '<%= params[:user_id] %>';
+        userIdInput.value = '<%= params[:user_id].to_i %>';
         form.appendChild(userIdInput);
     <% end %>
 
@@ -55,7 +55,7 @@
         var parentIssueIdInput = document.createElement('input');
         parentIssueIdInput.type = 'hidden';
         parentIssueIdInput.name = 'parent_issue_id';
-        parentIssueIdInput.value = '<%= params[:parent_issue_id] %>';
+        parentIssueIdInput.value = '<%= params[:parent_issue_id].to_i %>';
         form.appendChild(parentIssueIdInput);
     <% end %>
 
@@ -153,7 +153,7 @@
             var userIdInput = document.createElement('input');
             userIdInput.type = 'hidden';
             userIdInput.name = 'user_id';
-            userIdInput.value = '<%= params[:user_id] %>';
+            userIdInput.value = '<%= params[:user_id].to_i %>';
             form.appendChild(userIdInput);
         <% end %>
 
@@ -162,7 +162,7 @@
             var parentIssueIdInput = document.createElement('input');
             parentIssueIdInput.type = 'hidden';
             parentIssueIdInput.name = 'parent_issue_id';
-            parentIssueIdInput.value = '<%= params[:parent_issue_id] %>';
+            parentIssueIdInput.value = '<%= params[:parent_issue_id].to_i %>';
             form.appendChild(parentIssueIdInput);
         <% end %>
 

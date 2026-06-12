@@ -24,7 +24,9 @@ module RedmineTxMilestone
         overview = SummaryService.dashboard_overview(version_id)
         return nil if overview[:error]
 
-        version = Version.find(version_id)
+        version = Version.find_by(id: version_id)
+        return nil unless version
+
         project = version.project
 
         bug_data = build_bug_data(project, version_id)
@@ -84,9 +86,9 @@ module RedmineTxMilestone
                 "마감초과 #{a[:count]}건"
               when 'overdue_descendants'
                 "지연 #{a[:overdue_count]}건"
-              when 'no_due_date_descendants'
+              when 'no_due_date'
                 "일정없음 #{a[:count]}건"
-              when 'not_started_descendants'
+              when 'not_started'
                 "미개시 #{a[:count]}건"
               end
             end.compact
@@ -133,7 +135,7 @@ module RedmineTxMilestone
           result.present? ? result : nil
         end
       rescue => e
-        Rails.logger.error "SlackDashboardNotifier AI summary error: #{e.message}"
+        Rails.logger.error "SlackDashboardNotifier AI summary error: #{e.class} #{e.message}\n#{e.backtrace.first(5).join("\n")}"
         nil
       end
 
@@ -142,20 +144,23 @@ module RedmineTxMilestone
       def generate_timeline_image(overview)
         v = overview[:version]
         marks = (v[:marks] || []).select { |m| m[:date].present? }
-                  .map { |m| { date: Date.parse(m[:date]), name: m[:name], is_deadline: m[:is_deadline] } }
+                  .filter_map { |m|
+                    date = parse_date(m[:date])
+                    { date: date, name: m[:name], is_deadline: m[:is_deadline] } if date
+                  }
                   .sort_by { |m| m[:date] }
 
-        tl_start = v[:timeline_start] ? Date.parse(v[:timeline_start]) : nil
-        tl_end = v[:due_date] ? Date.parse(v[:due_date]) : nil
+        tl_start = parse_date(v[:timeline_start])
+        tl_end = parse_date(v[:due_date])
         return nil unless tl_start && tl_end && tl_start < tl_end
 
         tl_total = (tl_end - tl_start).to_i.to_f
-        today_pct = [[(Date.today - tl_start).to_i / tl_total, 0].max, 1].min
+        today_pct = [[(User.current.today - tl_start).to_i / tl_total, 0].max, 1].min
         fill_x = BAR_LEFT + (BAR_W * today_pct).to_i
 
         tmpfile = Tempfile.new(['timeline', '.png'])
 
-        MiniMagick::Tool::Convert.new do |c|
+        im_convert do |c|
           c.size "#{IMG_WIDTH}x#{TIMELINE_HEIGHT}"
           c << 'xc:white'
 
@@ -241,7 +246,7 @@ module RedmineTxMilestone
         n = data.size
         col_w = chart_w.to_f / n
 
-        MiniMagick::Tool::Convert.new do |c|
+        im_convert do |c|
           c.size "#{IMG_WIDTH}x#{CHART_HEIGHT}"
           c << 'xc:white'
 
@@ -340,7 +345,7 @@ module RedmineTxMilestone
         controller = MilestoneController.new
         controller.instance_variable_set(:@project, project)
         issues_by_days, rest_issue_count, _, _, all_bug_issues, _ =
-          controller.send(:process_bugs_data, Date.today, version_id)
+          controller.send(:process_bugs_data, User.current.today, version_id)
 
         return [] unless issues_by_days.present?
 
@@ -359,7 +364,23 @@ module RedmineTxMilestone
       end
 
       def escape_im(str)
-        str.gsub("'", "\\\\'")
+        # 백슬래시를 먼저 이스케이프해야 따옴표 이스케이프가 깨지지 않음
+        str.gsub('\\', '\\\\\\\\').gsub("'", "\\\\'")
+      end
+
+      def parse_date(value)
+        value.present? ? Date.parse(value.to_s) : nil
+      rescue ArgumentError, TypeError
+        nil
+      end
+
+      # MiniMagick 5.x는 Tool::Convert가 제거되고 MiniMagick.convert로 대체됨
+      def im_convert(&block)
+        if MiniMagick.respond_to?(:convert)
+          MiniMagick.convert(&block)
+        else
+          MiniMagick::Tool::Convert.new(&block)
+        end
       end
     end
   end

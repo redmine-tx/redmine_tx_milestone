@@ -1,35 +1,10 @@
 <%
-  # 다른 컨트롤러(예: MyController)에서 렌더링될 때도 헬퍼 메서드 사용 가능하도록
+  # 다른 컨트롤러(예: UsersController)에서 렌더링될 때도 헬퍼 메서드 사용 가능하도록
   extend RedmineTxMilestoneHelper unless respond_to?(:gantt_paused_periods, true)
-
-  def render_once( target_view )
-    @style_included ||= false
-    unless @style_included
-      @style_included = true
-      render partial: target_view
-    end
-  end
 %>
-<%= render_once('milestone/gantt_style') %>
+<%= gantt_chart_assets %>
 
 <%
-  # 담당자 링크 캐싱 헬퍼 메소드
-  def cached_link_to_principal(principal, options = {})
-    @cached_principals ||= {}
-    principal_id = principal.is_a?(Principal) ? principal.id : principal
-    
-    unless @cached_principals.key?(principal_id)
-      if principal.is_a?(Principal)
-        @cached_principals[principal_id] = link_to_principal(principal, options)
-      else
-        principal_obj = Principal.find_by(id: principal_id)
-        @cached_principals[principal_id] = principal_obj ? link_to_principal(principal_obj, options) : principal_id.to_s
-      end
-    end
-    
-    @cached_principals[principal_id]
-  end
-
   gantt_opts ||= {}
   date_marks ||= []
   virtual_ids ||= []
@@ -42,19 +17,22 @@
   person_width = gantt_opts[:person_width] || 90
   show_status_history = gantt_opts[:show_status_history] || params[:show_status_history] || false
 
-  # N+1 쿼리 방지
+  # N+1 쿼리 방지 (css_classes가 priority/status를 참조함)
   ActiveRecord::Associations::Preloader.new(
     records: issues,
-    associations: [:assigned_to, :project]
+    associations: [:assigned_to, :project, :status, :priority, :tracker]
   ).call
+
+  # 하위 일감 조회는 단일 쿼리 결과를 공유
+  all_descendants = gantt_all_descendants_for(issues)
 
   # 헬퍼 메서드로 비즈니스 로직 분리
   status_periods_map = gantt_status_periods(issues)
   paused_periods_map = status_periods_map[:paused] || {}
   review_periods_map = status_periods_map[:review] || {}
   depth_map_hash = gantt_depth_map(issues)
-  overrun_due_dates = gantt_top_level_overrun_due_dates(issues)
-  planning_segments_map = gantt_parent_planning_segments_map(issues)
+  overrun_due_dates = gantt_top_level_overrun_due_dates(issues, all_descendants)
+  planning_segments_map = gantt_parent_planning_segments_map(issues, gantt_visible_descendants_for(issues, all_descendants))
   planning_segment_dates = planning_segments_map.values.flatten.flat_map { |segment| [segment[:start_date], segment[:due_date]] }
 
   _due_date = defined?(due_date) && due_date ? due_date : nil
@@ -67,12 +45,14 @@
   show_today_column = Date.today >= start_date && Date.today <= end_date
   visible_date_marks = date_marks.select { |data| data[:date] && data[:date] >= start_date && data[:date] <= end_date }
 
-  _issues = gantt_prepare_issues(issues, depth_map_hash)
+  _issues = gantt_prepare_issues(issues, depth_map_hash, all_descendants)
 
-  holidays = []
+  holidays = {}
   if TxBaseHelper::HolidayApi.available?
     holidays = TxBaseHelper::HolidayApi.for_date_range( start_date, end_date )
   end
+
+  status_names_by_id = show_status_history ? IssueStatus.all.index_by(&:id) : {}
 %>
 
 <%
@@ -87,7 +67,7 @@
     <button type="button" class="gantt-bulk-save" data-gantt-save>Save</button>
     <button type="button" class="gantt-bulk-discard" data-gantt-discard>Discard</button>
   </div>
-  
+
   <div class="gantt-info-container" style="flex-shrink: 0; border: 1px solid #ccc;">
 
     <div class="gantt-grid" style="grid-template-columns: <%=title_width%>px <%=person_width%>px;">
@@ -97,8 +77,8 @@
             <div class="assignee" style="left: <%=title_width%>px;">담당자</div>
         <% end %>
 
-        
-          <% _issues.each_with_index do |_issue, index| %>
+
+          <% _issues.each do |_issue| %>
 
             <%
             issue = _issue[:issue]
@@ -146,20 +126,20 @@
                 <% end %>
                 <span class="issue-subject-link <%= subject_class %>" data-issue-tooltip="<%= issue.id %>">
                     <%= link_to "##{issue.id}", "/projects/#{ @project ? @project.identifier : issue.project.identifier }/milestone/gantt/issues/#{issue.id}" %>
-                    <%= link_to issue.subject.html_safe, gantt_opts[:issue_link_url] ? gantt_opts[:issue_link_url] + issue.id.to_s : issue_path(issue),
+                    <%= link_to issue.subject, gantt_opts[:issue_link_url] ? gantt_opts[:issue_link_url] + issue.id.to_s : issue_path(issue),
                                 class: issue.css_classes, title: issue.subject.truncate(100) %>
                 </span>
 
                 </div>
                 <% if gantt_opts[:hide_assignee] != true %>
                 <div class="assignee priority-<%= issue.priority_id %>" style="left: <%=title_width%>px; height: <%=cell_height%>px;"><%= cached_link_to_principal(issue.assigned_to) if issue.assigned_to %></div>
-                <% end %>        
+                <% end %>
             </div>
           <% end %>
-        
+
     </div>
   </div>
-  
+
   <div id="<%= gantt_container_id %>"
        class="gantt-container"
        data-gantt-sync="true"
@@ -167,14 +147,16 @@
        data-gantt-start-jd="<%= start_date.jd %>"
        data-gantt-end-jd="<%= end_date.jd %>"
        data-gantt-cell-width="<%= cell_width %>"
+       data-gantt-cell-height="<%= cell_height %>"
+       data-gantt-today-index="<%= today_index %>"
        <% if bulk_schedule_update_url %>data-gantt-bulk-update-url="<%= h(bulk_schedule_update_url) %>"<% end %>
        style='border: 1px solid #ccc;'>
     <div class="gantt-grid" style="grid-template-columns: repeat(<%=total_days+1%>, <%=cell_width%>px);">
       <!-- 월 헤더 -->
-      <% 
+      <%
         current_month = nil
         month_cell_count = 0
-        
+
         (start_date..end_date).each do |date|
           if current_month != date.month
             if current_month
@@ -187,13 +169,13 @@
           else
             month_cell_count += 1
           end
-          
+
           if date == end_date
       %>
             <div class="month-header" style="height: <%=cell_height - 4%>px; grid-column: span <%= month_cell_count %>;"><%= current_month %>월</div>
-      <%  
+      <%
           end
-        end 
+        end
       %>
 
       <!-- 날짜 헤더 -->
@@ -252,249 +234,250 @@
         <% end %>
       <% end %>
 
-      <% _issues.each_with_index do |_issue, index| %>
+      <%# 일감별 행(lane): 날짜별 빈 셀 대신 행 하나에 절대 위치로 바/라인을 배치 %>
+      <% _issues.each do |_issue| %>
         <%
           issue = _issue[:issue]
-          depth = _issue[:depth]
           show_no_due_date_warning = _issue[:show_no_due_date_warning]
+
+          issue_begin_date = issue.begin_time ? issue.begin_time.to_date : nil
+          issue_end_date = issue.end_time ? issue.end_time.to_date : Date.today
+          overrun_due_date = overrun_due_dates[issue.id]
+
+          issue_progress_status_history = if show_status_history then
+                                                issue.status_history.map{ |datetime, status_id|
+                                                  status = status_names_by_id[status_id.to_i]
+                                                  [ datetime.to_date, status ? status.name : '?' ]
+                                                 }.to_h
+                                            else
+                                                {}
+                                            end
+
+          planning_segments = planning_segments_map[issue.id] || []
+          planning_line_bounds = gantt_planning_line_bounds(planning_segments, start_date, end_date)
+          issue_schedule_line = !Tracker.is_exception?( issue.tracker_id ) && ( ( issue.due_date && issue.due_date >= start_date ) || ( issue.start_date && issue.due_date.nil? ) || ( issue.start_date && issue.start_date >= start_date && issue.start_date <= end_date ) )
+          planning_only_line = !issue_schedule_line && !Tracker.is_exception?( issue.tracker_id ) && planning_line_bounds.present?
+          show_line = issue_schedule_line || planning_only_line
+          show_line_before = ( issue.start_date && issue.start_date >= start_date )
+          show_line_after = ( issue.due_date && issue.due_date <= end_date )
+
+          if planning_only_line
+            line_start_date = planning_line_bounds[:start_date]
+            line_end_date = planning_line_bounds[:due_date]
+            show_line_before = false
+            show_line_after = false
+          else
+            line_start_date = if issue.start_date && issue.start_date < start_date then
+                                start_date
+                              else
+                                issue.start_date
+                              end
+            line_end_date = if issue.due_date && issue.due_date >= start_date then
+                              issue.due_date
+                            else
+                              end_date
+                            end
+
+            if line_start_date.nil? && line_end_date
+              line_start_date = if issue.due_date.present?
+                                  start_date
+                                elsif issue_begin_date && !IssueStatus.is_implemented?( issue.status_id )
+                                  issue_begin_date
+                                else
+                                  line_end_date
+                                end
+            end
+          end
+
+          line_width = line_start_date ? ( [ line_end_date, end_date ].min - line_start_date + 1 ).to_i * cell_width : cell_width
+          overrun_extension_width = if overrun_due_date && line_end_date && overrun_due_date > line_end_date
+                                      ( [ overrun_due_date, end_date ].min - line_end_date ).to_i * cell_width
+                                    else
+                                      0
+                                    end
+          line_hit_width = line_width + overrun_extension_width
+
+          line_in_range = line_start_date && line_start_date >= start_date && line_start_date <= end_date
+          line_left = line_in_range ? ( line_start_date - start_date ).to_i * cell_width : nil
+
+          schedule_start_date = issue.start_date&.to_date
+          schedule_due_date = issue.due_date&.to_date
+          schedule_has_start_date = schedule_start_date.present?
+          schedule_has_due_date = schedule_due_date.present?
+          schedule_display_start_date = schedule_start_date || (schedule_has_due_date ? line_start_date : nil)
+          schedule_display_due_date = schedule_due_date || (schedule_has_start_date ? end_date : nil)
+          schedule_anchor_date = start_date
+          schedule_virtual = virtual_ids.include?(issue.id)
+          schedule_editable_start = !schedule_has_start_date || issue.safe_attribute?('start_date', User.current)
+          schedule_editable_due = !schedule_has_due_date || issue.safe_attribute?('due_date', User.current)
+          schedule_draggable = (schedule_has_start_date || schedule_has_due_date) &&
+                               schedule_display_start_date.present? &&
+                               schedule_display_due_date.present? &&
+                               schedule_display_start_date >= start_date &&
+                               schedule_display_due_date <= end_date &&
+                               !Tracker.is_exception?(issue.tracker_id) &&
+                               issue.attributes_editable?(User.current) &&
+                               schedule_editable_start &&
+                               schedule_editable_due
+          schedule_update_url = if schedule_draggable
+                                  "/projects/#{issue.project.identifier}/milestone/gantt/issues/#{issue.id}/schedule"
+                                end
+          schedule_drag_attrs = if schedule_draggable
+                                  [
+                                    'data-gantt-schedule="true"',
+                                    "data-issue-id=\"#{issue.id}\"",
+                                    "data-has-start-date=\"#{schedule_has_start_date}\"",
+                                    "data-has-due-date=\"#{schedule_has_due_date}\"",
+                                    "data-start-jd=\"#{schedule_display_start_date.jd}\"",
+                                    "data-due-jd=\"#{schedule_display_due_date.jd}\"",
+                                    "data-original-start-jd=\"#{schedule_start_date&.jd}\"",
+                                    "data-original-due-jd=\"#{schedule_due_date&.jd}\"",
+                                    "data-original-display-start-jd=\"#{schedule_display_start_date.jd}\"",
+                                    "data-original-display-due-jd=\"#{schedule_display_due_date.jd}\"",
+                                    "data-anchor-jd=\"#{schedule_anchor_date.jd}\"",
+                                    "data-virtual-schedule=\"#{schedule_virtual}\"",
+                                    "data-update-url=\"#{h(schedule_update_url)}\""
+                                  ].join(' ').html_safe
+                                end
+          schedule_drag_left = schedule_draggable ? (schedule_display_start_date - schedule_anchor_date).to_i * cell_width : 0
+          schedule_drag_width = schedule_draggable ? (schedule_display_due_date - schedule_display_start_date + 1).to_i * cell_width : line_width
+
+          # 작업 바 시작 위치 (차트 시작 이전에 시작했으면 차트 왼쪽 끝에 고정)
+          bar_anchor_date = if issue_begin_date.nil?
+                              nil
+                            elsif issue_begin_date >= start_date && issue_begin_date <= end_date
+                              issue_begin_date
+                            elsif issue_begin_date < start_date && issue_end_date >= start_date
+                              start_date
+                            end
+          show_bar = bar_anchor_date && !Tracker.is_exception?( issue.tracker_id )
+          bar_left = show_bar ? ( bar_anchor_date - start_date ).to_i * cell_width : nil
+          bar_width = if !show_bar then
+                        0
+                      elsif issue_begin_date != issue_end_date then
+                        [1,  ( issue_end_date - bar_anchor_date + 1 ).to_i ].max * cell_width
+                      else
+                        if issue.end_time.nil?
+                          cell_width
+                        else
+                          if ( issue.end_time - issue.begin_time ) >= 4.hour then
+                            cell_width
+                          elsif ( issue.end_time - issue.begin_time ) >= 1.hour then
+                            ( cell_width * 0.5 ).to_i
+                          else
+                            3
+                          end
+                        end
+                      end
+
+          tip_date = [ issue.due_date, issue.end_time&.to_date, ( issue.end_time.nil? && issue.begin_time ? Date.today : nil ) ].compact.max
+          show_tip = issue.tip && !virtual_ids.include?(issue.id) && tip_date && tip_date >= start_date && tip_date <= end_date
         %>
 
-        <div class="task-row mouseover-<%=gantt_container_id%>">
-          <%
-            issue_expected_start_date = issue.start_date ? issue.start_date.to_date : -Date::Infinity.new
-            issue_expected_due_date = issue.due_date ? issue.due_date.to_date : Date::Infinity.new
+        <div class="task-lane mouseover-<%=gantt_container_id%><%= show_no_due_date_warning ? ' n' : '' %>"
+             style="height: <%=cell_height%>px; background-image: repeating-linear-gradient(to right, transparent 0, transparent <%= cell_width - 1 %>px, #eee <%= cell_width - 1 %>px, #eee <%= cell_width %>px);">
 
-            issue_begin_date = issue.begin_time ? issue.begin_time.to_date : nil
-            issue_end_date = issue.end_time ? issue.end_time.to_date : Date.today
-            overrun_due_date = overrun_due_dates[issue.id]
-
-            issue_progress_status_history = if show_status_history then
-                                                  issue.status_history.map{ |datetime, status_id|
-                                                    status = IssueStatus.find_by(id: status_id)
-                                                    [ datetime.to_date, status ? status.name : '?' ]
-                                                   }.to_h
-                                              else
-                                                  {}
-                                              end
-          %>
-
-          <%
-            planning_segments = planning_segments_map[issue.id] || []
-            planning_line_bounds = gantt_planning_line_bounds(planning_segments, start_date, end_date)
-            issue_schedule_line = !Tracker.is_exception?( issue.tracker_id ) && ( ( issue.due_date && issue.due_date >= start_date ) || ( issue.start_date && issue.due_date.nil? ) || ( issue.start_date && issue.start_date >= start_date && issue.start_date <= end_date ) )
-            planning_only_line = !issue_schedule_line && !Tracker.is_exception?( issue.tracker_id ) && planning_line_bounds.present?
-            show_line = issue_schedule_line || planning_only_line
-            show_line_before = ( issue.start_date && issue.start_date >= start_date )
-            show_line_after = ( issue.due_date && issue.due_date <= end_date )
-
-            if planning_only_line
-              line_start_date = planning_line_bounds[:start_date]
-              line_end_date = planning_line_bounds[:due_date]
-              show_line_before = false
-              show_line_after = false
-            else
-              line_start_date = if issue.start_date && issue.start_date < start_date then
-                                  start_date
-                                else
-                                  issue.start_date
-                                end
-              line_end_date = if issue.due_date && issue.due_date >= start_date then
-                                issue.due_date
-                              else
-                                end_date
-                              end
-
-              if line_start_date.nil? && line_end_date
-                line_start_date = if issue.due_date.present?
-                                    start_date
-                                  elsif issue_begin_date && !IssueStatus.is_implemented?( issue.status_id )
-                                    issue_begin_date
-                                  else
-                                    line_end_date
-                                  end
-              end
-            end
-
-            line_width = line_start_date ? ( [ line_end_date, end_date ].min - line_start_date + 1 ).to_i * cell_width : cell_width
-            overrun_extension_width = if overrun_due_date && line_end_date && overrun_due_date > line_end_date
-                                        ( [ overrun_due_date, end_date ].min - line_end_date ).to_i * cell_width
-                                      else
-                                        0
-                                      end
-            line_hit_width = line_width + overrun_extension_width
-
-            tooltip_begin_date = [ issue_begin_date, line_start_date ].compact.min
-            tooltip_end_date = [ issue_end_date, line_end_date ].compact.max
-
-            schedule_start_date = issue.start_date&.to_date
-            schedule_due_date = issue.due_date&.to_date
-            schedule_has_start_date = schedule_start_date.present?
-            schedule_has_due_date = schedule_due_date.present?
-            schedule_display_start_date = schedule_start_date || (schedule_has_due_date ? line_start_date : nil)
-            schedule_display_due_date = schedule_due_date || (schedule_has_start_date ? end_date : nil)
-            schedule_anchor_date = line_start_date
-            schedule_virtual = virtual_ids.include?(issue.id)
-            schedule_editable_start = !schedule_has_start_date || issue.safe_attribute?('start_date', User.current)
-            schedule_editable_due = !schedule_has_due_date || issue.safe_attribute?('due_date', User.current)
-            schedule_draggable = (schedule_has_start_date || schedule_has_due_date) &&
-                                 schedule_display_start_date.present? &&
-                                 schedule_display_due_date.present? &&
-                                 schedule_anchor_date.present? &&
-                                 schedule_display_start_date >= start_date &&
-                                 schedule_display_due_date <= end_date &&
-                                 !Tracker.is_exception?(issue.tracker_id) &&
-                                 issue.attributes_editable?(User.current) &&
-                                 schedule_editable_start &&
-                                 schedule_editable_due
-            schedule_update_url = if schedule_draggable
-                                    "/projects/#{issue.project.identifier}/milestone/gantt/issues/#{issue.id}/schedule"
-                                  end
-            schedule_drag_attrs = if schedule_draggable
-                                    [
-                                      'data-gantt-schedule="true"',
-                                      "data-issue-id=\"#{issue.id}\"",
-                                      "data-has-start-date=\"#{schedule_has_start_date}\"",
-                                      "data-has-due-date=\"#{schedule_has_due_date}\"",
-                                      "data-start-jd=\"#{schedule_display_start_date.jd}\"",
-                                      "data-due-jd=\"#{schedule_display_due_date.jd}\"",
-                                      "data-original-start-jd=\"#{schedule_start_date&.jd}\"",
-                                      "data-original-due-jd=\"#{schedule_due_date&.jd}\"",
-                                      "data-original-display-start-jd=\"#{schedule_display_start_date.jd}\"",
-                                      "data-original-display-due-jd=\"#{schedule_display_due_date.jd}\"",
-                                      "data-anchor-jd=\"#{schedule_anchor_date.jd}\"",
-                                      "data-virtual-schedule=\"#{schedule_virtual}\"",
-                                      "data-update-url=\"#{h(schedule_update_url)}\""
-                                    ].join(' ').html_safe
-                                  end
-            schedule_drag_left = schedule_draggable ? (schedule_display_start_date - schedule_anchor_date).to_i * cell_width : 0
-            schedule_drag_width = schedule_draggable ? (schedule_display_due_date - schedule_display_start_date + 1).to_i * cell_width : line_width
-          %>
-          
-          <% (start_date..end_date).each do |date| %>
-            <% has_tooltip = tooltip_begin_date && tooltip_end_date && ( ( date >= tooltip_begin_date && date <= tooltip_end_date) || date == line_start_date || date == line_end_date ) %>
-            <% has_bar_here = (date == issue_begin_date) || ( issue_begin_date && date == start_date && issue_begin_date < start_date && issue_end_date >= start_date ) %>
-            <div class="task-cell<%= show_no_due_date_warning ? ' n' : '' %>" style="height: <%=cell_height%>px; position: relative;" id="issue-<%= issue.id %>">
-              <!-- 작업완료 or 작업중 이슈 -->
-              <% if has_bar_here then%>
-                <%
-                  #debug[:date] = date.strftime( '%Y-%m-%d' )
-
-                  bar_width = if issue_begin_date != issue_end_date then
-                                [1,  ( issue_end_date - date + 1 ).to_i ].max * cell_width
-                              else
-                                if issue.end_time.nil?
-                                  cell_width
-                                else
-                                  if ( issue.end_time - issue.begin_time ) >= 4.hour then
-                                    cell_width
-                                  elsif ( issue.end_time - issue.begin_time ) >= 1.hour then
-                                    ( cell_width * 0.5 ).to_i
-                                  else
-                                    3
-                                  end
-                                end
-                              end
-                %>
-                <% if !Tracker.is_exception?( issue.tracker_id ) then %>
-                  <div class="task-bar<%= IssueStatus.is_implemented?( issue.status_id ) ? ' completed' : '' %>" style="width: <%= bar_width %>px; height: <%=cell_height-4%>px; position: absolute; left: 0; z-index: 1;" data-issue-tooltip="<%= issue.id %>">
-                    <% if IssueStatus.is_in_progress?( issue.status_id ) %>
-                      <div class="task-bar-progress" style="width: <%= issue.done_ratio %>%;"></div>
-                    <% end %>
-                    <%# review 구간 오버레이 %>
-                    <% (review_periods_map[issue.id] || []).each do |period| %>
-                      <% if (segment = gantt_bar_period_segment(period, date, issue_end_date, cell_width)) %>
-                        <div class="task-bar-review" style="left: <%= segment[:left_px] %>px; width: <%= segment[:width_px] %>px;"></div>
-                      <% end %>
-                    <% end %>
-                    <%# paused 구간 오버레이 %>
-                    <% (paused_periods_map[issue.id] || []).each do |period| %>
-                      <% if (segment = gantt_bar_period_segment(period, date, issue_end_date, cell_width)) %>
-                        <div class="task-bar-paused" style="left: <%= segment[:left_px] %>px; width: <%= segment[:width_px] %>px;"></div>
-                      <% end %>
-                    <% end %>
-                  </div>
-                  <div class="task-tooltip-hit" data-issue-tooltip="<%= issue.id %>" style="position: absolute; left: 0; top: 0; width: <%= (show_line && date == line_start_date && line_hit_width > bar_width) ? line_hit_width : bar_width %>px; height: <%= cell_height %>px; z-index: 50;"></div>
+          <!-- 작업완료 or 작업중 이슈 -->
+          <% if show_bar then %>
+            <div class="task-bar<%= IssueStatus.is_implemented?( issue.status_id ) ? ' completed' : '' %>" style="left: <%= bar_left %>px; top: 1px; width: <%= bar_width %>px; height: <%=cell_height-4%>px; position: absolute; z-index: 1;" data-issue-tooltip="<%= issue.id %>">
+              <% if IssueStatus.is_in_progress?( issue.status_id ) %>
+                <div class="task-bar-progress" style="width: <%= issue.done_ratio %>%;"></div>
+              <% end %>
+              <%# review 구간 오버레이 %>
+              <% (review_periods_map[issue.id] || []).each do |period| %>
+                <% if (segment = gantt_bar_period_segment(period, bar_anchor_date, issue_end_date, cell_width)) %>
+                  <div class="task-bar-review" style="left: <%= segment[:left_px] %>px; width: <%= segment[:width_px] %>px;"></div>
                 <% end %>
               <% end %>
-
-              <% if issue.tip && !virtual_ids.include?(issue.id) && date == [ ( issue.due_date ? issue.due_date : Date.today - 100.years ), ( issue.end_time ? issue.end_time.to_date : Date.today - 100.years ), ( issue.end_time.nil? && issue.begin_time ? Date.today : Date.today - 100.years ) ].max %>
-                <div class="gantt-tip-label" style="left: <%= cell_width + 2 %>px;"><%=issue.tip%></div>
-              <% end %>
-
-              <% if show_status_history && date < issue_end_date && issue_progress_status_history[date] && ( issue_begin_date == nil || issue_begin_date < date ) %>
-                <div class="gantt-status-label" style="left: 2px;"><%=issue_progress_status_history[date]%></div>
-              <% end %>
-
-              <!-- 예정 이슈 -->
-              <% if show_line && date == line_start_date %>
-                <%
-                  line_classes = ['arrow-line']
-                  line_classes << 'show-before' if show_line_before
-                  line_classes << 'show-after' if show_line_after
-                  line_state_classes = gantt_schedule_line_css_classes(issue, virtual_ids)
-                  line_classes << line_state_classes if line_state_classes.present?
-                  visible_line_end_date = [line_end_date, end_date].min
-                  planning_edge_classes = gantt_schedule_line_edge_css_classes(planning_segments, line_start_date, visible_line_end_date)
-                  line_classes.concat(planning_edge_classes.split) if planning_edge_classes.present?
-                  delayed_schedule_segment = gantt_delayed_schedule_segment(issue, line_start_date, visible_line_end_date)
-                %>
-                <% unless planning_only_line %>
-                  <div class="<%= line_classes.join(' ') %> gantt-schedule-line<%= schedule_draggable ? ' gantt-schedule-editable' : '' %>"
-                       style="width: <%=line_width %>px; top: <%= cell_height -3 %>px;"
-                       data-issue-tooltip="<%= issue.id %>"
-                       <% if schedule_draggable %><%= schedule_drag_attrs %><% end %>></div>
-                <% end %>
-                <% planning_segments.each do |segment| %>
-                  <%
-                    planning_start_date = [segment[:start_date], line_start_date].max
-                    planning_end_date = [segment[:due_date], visible_line_end_date].min
-                    next if planning_start_date > planning_end_date
-
-                    planning_left = (planning_start_date - line_start_date).to_i * cell_width
-                    planning_width = (planning_end_date - planning_start_date + 1).to_i * cell_width
-                  %>
-                  <div class="arrow-line-planning-segment" style="left: <%= planning_left %>px; width: <%= planning_width %>px; top: <%= cell_height -3 %>px;" data-issue-tooltip="<%= issue.id %>"></div>
-                <% end %>
-                <% if delayed_schedule_segment %>
-                  <%
-                    delayed_left = (delayed_schedule_segment[:start_date] - line_start_date).to_i * cell_width
-                    delayed_width = (delayed_schedule_segment[:due_date] - delayed_schedule_segment[:start_date] + 1).to_i * cell_width
-                    delayed_segment_classes = ['arrow-line-delayed-segment']
-                    delayed_segment_classes << 'show-after' if delayed_schedule_segment[:due_date] == visible_line_end_date && show_line_after
-                  %>
-                  <div class="<%= delayed_segment_classes.join(' ') %>" style="left: <%= delayed_left %>px; width: <%= delayed_width %>px; top: <%= cell_height -3 %>px;" data-issue-tooltip="<%= issue.id %>"></div>
-                <% end %>
-                <% if overrun_extension_width > 0 %>
-                  <div class="arrow-line-overrun" style="left: <%= line_width %>px; width: <%= overrun_extension_width %>px; top: <%= cell_height -3 %>px;" data-issue-tooltip="<%= issue.id %>"></div>
-                <% end %>
-                <% unless has_bar_here %>
-                  <div class="task-tooltip-hit" data-issue-tooltip="<%= issue.id %>" style="position: absolute; left: 0; top: 0; width: <%= line_hit_width %>px; height: <%= cell_height %>px; z-index: 50;"></div>
-                <% end %>
-                <% if schedule_draggable %>
-                  <div class="gantt-schedule-draggable gantt-schedule-move-hit"
-                       data-issue-tooltip="<%= issue.id %>"
-                       <%= schedule_drag_attrs %>
-                       data-drag-mode="move"
-                       style="position: absolute; left: <%= schedule_drag_left %>px; top: 0; width: <%= schedule_drag_width %>px; height: <%= cell_height %>px; z-index: 55;"></div>
-                <% end %>
-                <% if schedule_draggable && schedule_has_start_date && schedule_display_start_date > start_date %>
-                  <div class="gantt-schedule-draggable gantt-schedule-resize-hit"
-                       data-issue-tooltip="<%= issue.id %>"
-                       <%= schedule_drag_attrs %>
-                       data-drag-mode="start"
-                       style="left: <%= schedule_drag_left - cell_width %>px; width: <%= cell_width %>px;"></div>
-                <% end %>
-                <% if schedule_draggable && schedule_has_due_date && schedule_display_due_date < end_date %>
-                  <div class="gantt-schedule-draggable gantt-schedule-resize-hit"
-                       data-issue-tooltip="<%= issue.id %>"
-                       <%= schedule_drag_attrs %>
-                       data-drag-mode="due"
-                       style="left: <%= schedule_drag_left + schedule_drag_width %>px; width: <%= cell_width %>px;"></div>
+              <%# paused 구간 오버레이 %>
+              <% (paused_periods_map[issue.id] || []).each do |period| %>
+                <% if (segment = gantt_bar_period_segment(period, bar_anchor_date, issue_end_date, cell_width)) %>
+                  <div class="task-bar-paused" style="left: <%= segment[:left_px] %>px; width: <%= segment[:width_px] %>px;"></div>
                 <% end %>
               <% end %>
-
             </div>
+            <div class="task-tooltip-hit" data-issue-tooltip="<%= issue.id %>" style="position: absolute; left: <%= bar_left %>px; top: 0; width: <%= (show_line && line_left == bar_left && line_hit_width > bar_width) ? line_hit_width : bar_width %>px; height: <%= cell_height %>px; z-index: 50;"></div>
           <% end %>
+
+          <% if show_tip %>
+            <div class="gantt-tip-label" style="left: <%= ( tip_date - start_date + 1 ).to_i * cell_width + 2 %>px; width: <%= cell_width * 10 %>px;"><%=issue.tip%></div>
+          <% end %>
+
+          <% issue_progress_status_history.each do |history_date, status_name| %>
+            <% next unless history_date >= start_date && history_date <= end_date %>
+            <% next unless history_date < issue_end_date %>
+            <% next unless issue_begin_date.nil? || issue_begin_date < history_date %>
+            <div class="gantt-status-label" style="left: <%= ( history_date - start_date ).to_i * cell_width + 2 %>px; width: <%= cell_width * 10 %>px;"><%= status_name %></div>
+          <% end %>
+
+          <!-- 예정 이슈 -->
+          <% if show_line && line_in_range %>
+            <%
+              line_classes = ['arrow-line']
+              line_classes << 'show-before' if show_line_before
+              line_classes << 'show-after' if show_line_after
+              line_state_classes = gantt_schedule_line_css_classes(issue, virtual_ids)
+              line_classes << line_state_classes if line_state_classes.present?
+              visible_line_end_date = [line_end_date, end_date].min
+              planning_edge_classes = gantt_schedule_line_edge_css_classes(planning_segments, line_start_date, visible_line_end_date)
+              line_classes.concat(planning_edge_classes.split) if planning_edge_classes.present?
+              delayed_schedule_segment = gantt_delayed_schedule_segment(issue, line_start_date, visible_line_end_date)
+            %>
+            <% unless planning_only_line %>
+              <div class="<%= line_classes.join(' ') %> gantt-schedule-line<%= schedule_draggable ? ' gantt-schedule-editable' : '' %>"
+                   style="left: <%= line_left %>px; width: <%=line_width %>px; top: <%= cell_height -3 %>px;"
+                   data-issue-tooltip="<%= issue.id %>"
+                   <% if schedule_draggable %><%= schedule_drag_attrs %><% end %>></div>
+            <% end %>
+            <% planning_segments.each do |segment| %>
+              <%
+                planning_start_date = [segment[:start_date], line_start_date].max
+                planning_end_date = [segment[:due_date], visible_line_end_date].min
+                next if planning_start_date > planning_end_date
+
+                planning_left = (planning_start_date - line_start_date).to_i * cell_width
+                planning_width = (planning_end_date - planning_start_date + 1).to_i * cell_width
+              %>
+              <div class="arrow-line-planning-segment" style="left: <%= line_left + planning_left %>px; width: <%= planning_width %>px; top: <%= cell_height -3 %>px;" data-issue-tooltip="<%= issue.id %>"></div>
+            <% end %>
+            <% if delayed_schedule_segment %>
+              <%
+                delayed_left = (delayed_schedule_segment[:start_date] - line_start_date).to_i * cell_width
+                delayed_width = (delayed_schedule_segment[:due_date] - delayed_schedule_segment[:start_date] + 1).to_i * cell_width
+                delayed_segment_classes = ['arrow-line-delayed-segment']
+                delayed_segment_classes << 'show-after' if delayed_schedule_segment[:due_date] == visible_line_end_date && show_line_after
+              %>
+              <div class="<%= delayed_segment_classes.join(' ') %>" style="left: <%= line_left + delayed_left %>px; width: <%= delayed_width %>px; top: <%= cell_height -3 %>px;" data-issue-tooltip="<%= issue.id %>"></div>
+            <% end %>
+            <% if overrun_extension_width > 0 %>
+              <div class="arrow-line-overrun" style="left: <%= line_left + line_width %>px; width: <%= overrun_extension_width %>px; top: <%= cell_height -3 %>px;" data-issue-tooltip="<%= issue.id %>"></div>
+            <% end %>
+            <% unless show_bar && bar_left == line_left %>
+              <div class="task-tooltip-hit" data-issue-tooltip="<%= issue.id %>" style="position: absolute; left: <%= line_left %>px; top: 0; width: <%= line_hit_width %>px; height: <%= cell_height %>px; z-index: 50;"></div>
+            <% end %>
+            <% if schedule_draggable %>
+              <div class="gantt-schedule-draggable gantt-schedule-move-hit"
+                   data-issue-tooltip="<%= issue.id %>"
+                   <%= schedule_drag_attrs %>
+                   data-drag-mode="move"
+                   style="position: absolute; left: <%= schedule_drag_left %>px; top: 0; width: <%= schedule_drag_width %>px; height: <%= cell_height %>px; z-index: 55;"></div>
+            <% end %>
+            <% if schedule_draggable && schedule_has_start_date && schedule_display_start_date > start_date %>
+              <div class="gantt-schedule-draggable gantt-schedule-resize-hit"
+                   data-issue-tooltip="<%= issue.id %>"
+                   <%= schedule_drag_attrs %>
+                   data-drag-mode="start"
+                   style="left: <%= schedule_drag_left - cell_width %>px; width: <%= cell_width %>px;"></div>
+            <% end %>
+            <% if schedule_draggable && schedule_has_due_date && schedule_display_due_date < end_date %>
+              <div class="gantt-schedule-draggable gantt-schedule-resize-hit"
+                   data-issue-tooltip="<%= issue.id %>"
+                   <%= schedule_drag_attrs %>
+                   data-drag-mode="due"
+                   style="left: <%= schedule_drag_left + schedule_drag_width %>px; width: <%= cell_width %>px;"></div>
+            <% end %>
+          <% end %>
+
         </div>
       <% end %>
 
@@ -506,747 +489,7 @@
 <%= context_menu %>
 
 <script>
-  (function() {
-    function ensureGanttSyncManager() {
-      if (window.TxMilestoneGanttSyncManager) {
-        return window.TxMilestoneGanttSyncManager;
-      }
-
-      window.TxMilestoneGanttSyncManager = {
-        isSyncing: false,
-
-        register: function(sourceEl) {
-          if (!sourceEl || sourceEl.getAttribute('data-gantt-sync-bound') === 'true') {
-            return;
-          }
-
-          sourceEl.setAttribute('data-gantt-sync-bound', 'true');
-
-          var manager = this;
-          sourceEl.addEventListener('scroll', function() {
-            manager.syncFrom(sourceEl);
-          });
-        },
-
-        syncFrom: function(sourceEl) {
-          if (this.isSyncing) {
-            return;
-          }
-
-          var sourceCellWidth = parseFloat(sourceEl.getAttribute('data-gantt-cell-width'));
-          var sourceStartJd = parseFloat(sourceEl.getAttribute('data-gantt-start-jd'));
-          if (!sourceCellWidth || isNaN(sourceStartJd)) {
-            return;
-          }
-
-          var visibleStartJd = sourceStartJd + (sourceEl.scrollLeft / sourceCellWidth);
-
-          this.isSyncing = true;
-          try {
-            $('.gantt-container[data-gantt-sync="true"]').each(function(_, targetEl) {
-              if (targetEl === sourceEl) {
-                return;
-              }
-
-              var targetCellWidth = parseFloat(targetEl.getAttribute('data-gantt-cell-width'));
-              var targetStartJd = parseFloat(targetEl.getAttribute('data-gantt-start-jd'));
-              if (!targetCellWidth || isNaN(targetStartJd)) {
-                return;
-              }
-
-              var targetScrollLeft = (visibleStartJd - targetStartJd) * targetCellWidth;
-              var maxScrollLeft = Math.max(targetEl.scrollWidth - targetEl.clientWidth, 0);
-              targetEl.scrollLeft = Math.max(0, Math.min(targetScrollLeft, maxScrollLeft));
-            });
-          } finally {
-            this.isSyncing = false;
-          }
-        }
-      };
-
-      return window.TxMilestoneGanttSyncManager;
-    }
-
-    function setupGanttScheduleDrag($wrapper, ganttEl, cellWidth, cellHeight) {
-      if (!ganttEl || ganttEl.getAttribute('data-gantt-schedule-drag-bound') === 'true') {
-        return;
-      }
-
-      ganttEl.setAttribute('data-gantt-schedule-drag-bound', 'true');
-
-      var chartStartJd = parseInt(ganttEl.getAttribute('data-gantt-start-jd'), 10);
-      var chartEndJd = parseInt(ganttEl.getAttribute('data-gantt-end-jd'), 10);
-      var chartStartDate = ganttEl.getAttribute('data-gantt-start-date');
-      var activeDrag = null;
-      var pendingChanges = {};
-      var saveInProgress = false;
-      var $bulkActions = $wrapper.find('[data-gantt-bulk-actions]');
-      var $saveButton = $bulkActions.find('[data-gantt-save]');
-      var $discardButton = $bulkActions.find('[data-gantt-discard]');
-
-      function csrfToken() {
-        var meta = document.querySelector('meta[name="csrf-token"]');
-        return meta ? meta.getAttribute('content') : '';
-      }
-
-      function clamp(value, min, max) {
-        return Math.max(min, Math.min(value, max));
-      }
-
-      function addDays(isoDate, days) {
-        var parts = isoDate.split('-').map(function(part) { return parseInt(part, 10); });
-        var date = new Date(Date.UTC(parts[0], parts[1] - 1, parts[2]));
-        date.setUTCDate(date.getUTCDate() + days);
-        return date.toISOString().slice(0, 10);
-      }
-
-      function isoFromJd(jd) {
-        return addDays(chartStartDate, jd - chartStartJd);
-      }
-
-      function jdFromIso(isoDate) {
-        if (!isoDate) {
-          return null;
-        }
-
-        var startParts = chartStartDate.split('-').map(function(part) { return parseInt(part, 10); });
-        var dateParts = isoDate.split('-').map(function(part) { return parseInt(part, 10); });
-        var startDate = new Date(Date.UTC(startParts[0], startParts[1] - 1, startParts[2]));
-        var targetDate = new Date(Date.UTC(dateParts[0], dateParts[1] - 1, dateParts[2]));
-        var diffDays = Math.round((targetDate.getTime() - startDate.getTime()) / 86400000);
-        return chartStartJd + diffDays;
-      }
-
-      function scheduleSelector(issueId) {
-        return '[data-gantt-schedule="true"][data-issue-id="' + issueId + '"]';
-      }
-
-      function firstScheduleElement(issueId) {
-        return $wrapper.find(scheduleSelector(issueId)).first()[0];
-      }
-
-      function optionalJd(element, attrName) {
-        var value = element.getAttribute(attrName);
-        if (value === null || value === '') {
-          return null;
-        }
-
-        var parsed = parseInt(value, 10);
-        return isNaN(parsed) ? null : parsed;
-      }
-
-      function scheduleStateForIssue(issueId) {
-        var element = firstScheduleElement(issueId);
-        if (!element) {
-          return null;
-        }
-
-        var displayStartJd = optionalJd(element, 'data-start-jd');
-        var displayDueJd = optionalJd(element, 'data-due-jd');
-        var originalDisplayStartJd = optionalJd(element, 'data-original-display-start-jd');
-        var originalDisplayDueJd = optionalJd(element, 'data-original-display-due-jd');
-        if (displayStartJd === null || displayDueJd === null || originalDisplayStartJd === null || originalDisplayDueJd === null) {
-          return null;
-        }
-
-        return {
-          hasStartDate: element.getAttribute('data-has-start-date') === 'true',
-          hasDueDate: element.getAttribute('data-has-due-date') === 'true',
-          originalStartJd: optionalJd(element, 'data-original-start-jd'),
-          originalDueJd: optionalJd(element, 'data-original-due-jd'),
-          originalDisplayStartJd: originalDisplayStartJd,
-          originalDisplayDueJd: originalDisplayDueJd,
-          displayStartJd: displayStartJd,
-          displayDueJd: displayDueJd,
-          virtualSchedule: element.getAttribute('data-virtual-schedule') === 'true'
-        };
-      }
-
-      function pendingCount() {
-        return Object.keys(pendingChanges).length;
-      }
-
-      function updateBulkActions() {
-        var count = pendingCount();
-        if (!$bulkActions.length) {
-          return;
-        }
-
-        if (count > 0) {
-          $bulkActions.css('display', 'flex');
-        } else {
-          $bulkActions.hide();
-        }
-
-        $saveButton.prop('disabled', saveInProgress || count === 0);
-        $discardButton.prop('disabled', saveInProgress || count === 0);
-      }
-
-      function rangeForDelta(drag, deltaDays) {
-        if (drag.hasStartDate && !drag.hasDueDate) {
-          var startOnlyJd = clamp(drag.editStartJd + deltaDays, chartStartJd, chartEndJd);
-          return {
-            startJd: startOnlyJd,
-            dueJd: chartEndJd,
-            editStartJd: startOnlyJd,
-            editDueJd: null
-          };
-        }
-
-        if (!drag.hasStartDate && drag.hasDueDate) {
-          var dueOnlyJd = clamp(drag.editDueJd + deltaDays, chartStartJd, chartEndJd);
-          return {
-            startJd: chartStartJd,
-            dueJd: dueOnlyJd,
-            editStartJd: null,
-            editDueJd: dueOnlyJd
-          };
-        }
-
-        var durationDays = drag.dueJd - drag.startJd;
-        var nextStartJd = drag.startJd;
-        var nextDueJd = drag.dueJd;
-
-        if (drag.mode === 'start') {
-          nextStartJd = clamp(drag.startJd + deltaDays, chartStartJd, drag.dueJd);
-        } else if (drag.mode === 'due') {
-          nextDueJd = clamp(drag.dueJd + deltaDays, drag.startJd, chartEndJd);
-        } else {
-          nextStartJd = clamp(drag.startJd + deltaDays, chartStartJd, chartEndJd - durationDays);
-          nextDueJd = nextStartJd + durationDays;
-        }
-
-        return {
-          startJd: nextStartJd,
-          dueJd: nextDueJd,
-          editStartJd: nextStartJd,
-          editDueJd: nextDueJd
-        };
-      }
-
-      function updatePreview(drag, range) {
-        var left = (range.startJd - drag.anchorJd) * cellWidth;
-        var width = (range.dueJd - range.startJd + 1) * cellWidth;
-
-        drag.preview.style.left = left + 'px';
-        drag.preview.style.top = Math.max(cellHeight - 7, 0) + 'px';
-        drag.preview.style.width = width + 'px';
-      }
-
-      function updateScheduleElements(issueId, startJd, dueJd, options) {
-        options = options || {};
-        var updateLine = options.updateLine !== false;
-        var $elements = $wrapper.find(scheduleSelector(issueId));
-
-        $elements.attr('data-start-jd', startJd);
-        $elements.attr('data-due-jd', dueJd);
-
-        $elements.each(function(_, element) {
-          var $element = $(element);
-          var anchorJd = parseInt(element.getAttribute('data-anchor-jd'), 10);
-          var left = (startJd - anchorJd) * cellWidth;
-          var width = (dueJd - startJd + 1) * cellWidth;
-          var moveScheduleLine = $element.hasClass('gantt-schedule-line') && updateLine;
-
-          if (moveScheduleLine || $element.hasClass('gantt-schedule-move-hit')) {
-            element.style.left = left + 'px';
-            element.style.width = width + 'px';
-          } else if (element.getAttribute('data-drag-mode') === 'start') {
-            element.style.left = (left - cellWidth) + 'px';
-            element.style.display = startJd > chartStartJd ? '' : 'none';
-          } else if (element.getAttribute('data-drag-mode') === 'due') {
-            element.style.left = (left + width) + 'px';
-            element.style.display = dueJd < chartEndJd ? '' : 'none';
-          }
-
-          if (moveScheduleLine) {
-            $element.toggleClass('show-before', startJd >= chartStartJd);
-            $element.toggleClass('show-after', dueJd <= chartEndJd);
-          }
-        });
-      }
-
-      function setOptionalJdAttr($elements, attrName, value) {
-        if (value === null || typeof value === 'undefined') {
-          $elements.attr(attrName, '');
-        } else {
-          $elements.attr(attrName, value);
-        }
-      }
-
-      function updateOriginalRange(issueId, startJd, dueJd, displayStartJd, displayDueJd) {
-        var $elements = $wrapper.find(scheduleSelector(issueId));
-        setOptionalJdAttr($elements, 'data-original-start-jd', startJd);
-        setOptionalJdAttr($elements, 'data-original-due-jd', dueJd);
-        $elements.attr('data-original-display-start-jd', displayStartJd);
-        $elements.attr('data-original-display-due-jd', displayDueJd);
-      }
-
-      function removePendingLine(issueId) {
-        $wrapper.find('.gantt-schedule-pending-line[data-issue-id="' + issueId + '"]').remove();
-      }
-
-      function renderPendingLine(issueId, startJd, dueJd) {
-        var sourceLine = $wrapper.find('.gantt-schedule-line[data-issue-id="' + issueId + '"]').first()[0] || firstScheduleElement(issueId);
-        if (!sourceLine) {
-          return;
-        }
-
-        var anchorJd = parseInt(sourceLine.getAttribute('data-anchor-jd'), 10);
-        var sourceCell = $(sourceLine).closest('.task-cell')[0];
-        if (!sourceCell || isNaN(anchorJd)) {
-          return;
-        }
-
-        var pendingLine = $wrapper.find('.gantt-schedule-pending-line[data-issue-id="' + issueId + '"]').first()[0];
-        if (!pendingLine) {
-          pendingLine = document.createElement('div');
-          pendingLine.className = 'gantt-schedule-pending-line';
-          pendingLine.setAttribute('data-issue-id', issueId);
-          pendingLine.setAttribute('data-issue-tooltip', issueId);
-          sourceCell.appendChild(pendingLine);
-        }
-
-        pendingLine.classList.toggle('virtual', sourceLine.getAttribute('data-virtual-schedule') === 'true');
-        pendingLine.style.left = ((startJd - anchorJd) * cellWidth) + 'px';
-        pendingLine.style.top = Math.max(cellHeight - 8, 0) + 'px';
-        pendingLine.style.width = ((dueJd - startJd + 1) * cellWidth) + 'px';
-        pendingLine.setAttribute('title', isoFromJd(startJd) + ' - ' + isoFromJd(dueJd));
-      }
-
-      function setPendingChange(issueId, range, updateUrl) {
-        var state = scheduleStateForIssue(issueId);
-        if (!state) {
-          return;
-        }
-
-        var sameStart = !state.hasStartDate || range.editStartJd === state.originalStartJd;
-        var sameDue = !state.hasDueDate || range.editDueJd === state.originalDueJd;
-
-        if (sameStart && sameDue) {
-          delete pendingChanges[issueId];
-          removePendingLine(issueId);
-          updateScheduleElements(issueId, state.originalDisplayStartJd, state.originalDisplayDueJd);
-          updateBulkActions();
-          return;
-        }
-
-        pendingChanges[issueId] = {
-          issue_id: parseInt(issueId, 10),
-          has_start_date: state.hasStartDate,
-          has_due_date: state.hasDueDate,
-          start_jd: range.startJd,
-          due_jd: range.dueJd,
-          edit_start_jd: range.editStartJd,
-          edit_due_jd: range.editDueJd,
-          start_date: state.hasStartDate ? isoFromJd(range.editStartJd) : null,
-          due_date: state.hasDueDate ? isoFromJd(range.editDueJd) : null,
-          virtual_schedule: state.virtualSchedule,
-          update_url: updateUrl
-        };
-
-        renderPendingLine(issueId, range.startJd, range.dueJd);
-        updateScheduleElements(issueId, range.startJd, range.dueJd, { updateLine: false });
-        updateBulkActions();
-      }
-
-      function clearActiveDrag() {
-        if (!activeDrag) {
-          return;
-        }
-
-        if (activeDrag.preview && activeDrag.preview.parentNode) {
-          activeDrag.preview.parentNode.removeChild(activeDrag.preview);
-        }
-
-        $wrapper.removeClass('gantt-schedule-dragging');
-        document.removeEventListener('mousemove', onMouseMove);
-        document.removeEventListener('mouseup', onMouseUp);
-        activeDrag = null;
-      }
-
-      function onMouseMove(event) {
-        if (!activeDrag) {
-          return;
-        }
-
-        var deltaDays = Math.round((event.clientX - activeDrag.startClientX) / cellWidth);
-        var range = rangeForDelta(activeDrag, deltaDays);
-        activeDrag.nextStartJd = range.startJd;
-        activeDrag.nextDueJd = range.dueJd;
-        activeDrag.nextRange = range;
-        activeDrag.changed = range.editStartJd !== activeDrag.editStartJd || range.editDueJd !== activeDrag.editDueJd;
-        updatePreview(activeDrag, range);
-      }
-
-      function onMouseUp() {
-        if (!activeDrag) {
-          return;
-        }
-
-        var drag = activeDrag;
-        document.removeEventListener('mousemove', onMouseMove);
-        document.removeEventListener('mouseup', onMouseUp);
-
-        if (!drag.changed) {
-          clearActiveDrag();
-          return;
-        }
-
-        setPendingChange(drag.issueId, drag.nextRange, drag.updateUrl);
-        clearActiveDrag();
-      }
-
-      function pendingPayloads() {
-        return Object.keys(pendingChanges).map(function(issueId) {
-          var change = pendingChanges[issueId];
-          return {
-            issue_id: change.issue_id,
-            start_date: change.start_date,
-            due_date: change.due_date,
-            start_jd: change.start_jd,
-            due_jd: change.due_jd,
-            edit_start_jd: change.edit_start_jd,
-            edit_due_jd: change.edit_due_jd,
-            has_start_date: change.has_start_date,
-            has_due_date: change.has_due_date,
-            virtual_schedule: change.virtual_schedule,
-            update_url: change.update_url
-          };
-        });
-      }
-
-      function payloadForChange(change) {
-        var payload = {
-          issue_id: change.issue_id
-        };
-
-        if (change.has_start_date) {
-          payload.start_date = change.start_date;
-        }
-
-        if (change.has_due_date) {
-          payload.due_date = change.due_date;
-        }
-
-        return payload;
-      }
-
-      function applySavedScheduleChange(change, savedSchedule) {
-        var issueId = String(change.issue_id);
-        var savedStartJd = jdFromIso(savedSchedule.start_date);
-        var savedDueJd = jdFromIso(savedSchedule.due_date);
-        var displayStartJd = savedStartJd !== null ? savedStartJd : (savedDueJd !== null ? chartStartJd : change.start_jd);
-        var displayDueJd = savedDueJd !== null ? savedDueJd : (savedStartJd !== null ? chartEndJd : change.due_jd);
-
-        updateScheduleElements(issueId, displayStartJd, displayDueJd);
-        updateOriginalRange(issueId, savedStartJd, savedDueJd, displayStartJd, displayDueJd);
-        removePendingLine(issueId);
-      }
-
-      function applyVirtualScheduleChange(change) {
-        var issueId = String(change.issue_id);
-        updateScheduleElements(issueId, change.start_jd, change.due_jd);
-        updateOriginalRange(issueId, change.edit_start_jd, change.edit_due_jd, change.start_jd, change.due_jd);
-        removePendingLine(issueId);
-      }
-
-      function parseJsonResponse(response, fallbackMessage) {
-        return response.text().then(function(text) {
-          var data = {};
-          try {
-            data = text ? JSON.parse(text) : {};
-          } catch (error) {
-            data = {};
-          }
-
-          if (!response.ok || !data.success) {
-            throw new Error(data.message || fallbackMessage);
-          }
-          return data;
-        });
-      }
-
-      function saveChangesRequest(changes) {
-        var bulkUpdateUrl = ganttEl.getAttribute('data-gantt-bulk-update-url');
-        var headers = {
-          'Content-Type': 'application/json',
-          'Accept': 'application/json',
-          'X-CSRF-Token': csrfToken()
-        };
-
-        if (bulkUpdateUrl) {
-          return fetch(bulkUpdateUrl, {
-            method: 'POST',
-            credentials: 'same-origin',
-            headers: headers,
-            body: JSON.stringify({
-              schedules: changes.map(function(change) {
-                return payloadForChange(change);
-              })
-            })
-          }).then(function(response) {
-            return parseJsonResponse(response, '일정 저장에 실패했습니다.');
-          });
-        }
-
-        return Promise.all(changes.map(function(change) {
-          return fetch(change.update_url, {
-            method: 'POST',
-            credentials: 'same-origin',
-            headers: headers,
-            body: JSON.stringify(payloadForChange(change))
-          }).then(function(response) {
-            return parseJsonResponse(response, '일정 저장에 실패했습니다.');
-          });
-        }));
-      }
-
-      function savePendingChanges() {
-        var changes = pendingPayloads();
-        if (saveInProgress || changes.length === 0) {
-          return;
-        }
-
-        var virtualChanges = changes.filter(function(change) {
-          return change.virtual_schedule;
-        });
-        var persistedChanges = changes.filter(function(change) {
-          return !change.virtual_schedule;
-        });
-
-        saveInProgress = true;
-        $wrapper.addClass('gantt-schedule-bulk-saving');
-        updateBulkActions();
-
-        var request = persistedChanges.length > 0 ? saveChangesRequest(persistedChanges) : Promise.resolve({ schedules: [] });
-
-        request.then(function(data) {
-          var savedSchedules = Array.isArray(data) ? data : (data.schedules || []);
-          var savedByIssueId = {};
-          savedSchedules.forEach(function(savedSchedule) {
-            savedByIssueId[String(savedSchedule.issue_id)] = savedSchedule;
-          });
-
-          persistedChanges.forEach(function(change) {
-            var issueId = String(change.issue_id);
-            var savedSchedule = savedByIssueId[issueId];
-            if (!savedSchedule) {
-              throw new Error('일정 저장 결과를 확인할 수 없습니다.');
-            }
-
-            applySavedScheduleChange(change, savedSchedule);
-          });
-
-          virtualChanges.forEach(function(change) {
-            applyVirtualScheduleChange(change);
-          });
-
-          pendingChanges = {};
-          saveInProgress = false;
-          $wrapper.removeClass('gantt-schedule-bulk-saving');
-          updateBulkActions();
-        }).catch(function(error) {
-          saveInProgress = false;
-          $wrapper.removeClass('gantt-schedule-bulk-saving');
-          updateBulkActions();
-          alert(error.message || '일정 저장에 실패했습니다.');
-        });
-      }
-
-      function discardPendingChanges() {
-        if (saveInProgress) {
-          return;
-        }
-
-        Object.keys(pendingChanges).forEach(function(issueId) {
-          var state = scheduleStateForIssue(issueId);
-          if (state) {
-            updateScheduleElements(issueId, state.originalDisplayStartJd, state.originalDisplayDueJd);
-          }
-          removePendingLine(issueId);
-        });
-
-        pendingChanges = {};
-        updateBulkActions();
-      }
-
-      $saveButton.on('click', savePendingChanges);
-      $discardButton.on('click', discardPendingChanges);
-
-      $wrapper.on('mousedown', '.gantt-schedule-draggable', function(event) {
-        if (activeDrag || saveInProgress) {
-          return;
-        }
-
-        if (event.button !== 0) {
-          return;
-        }
-
-        var target = this;
-        var issueId = target.getAttribute('data-issue-id');
-        var startJd = parseInt(target.getAttribute('data-start-jd'), 10);
-        var dueJd = parseInt(target.getAttribute('data-due-jd'), 10);
-        var anchorJd = parseInt(target.getAttribute('data-anchor-jd'), 10);
-        var updateUrl = target.getAttribute('data-update-url');
-        var mode = target.getAttribute('data-drag-mode') || 'move';
-        var sourceCell = $(target).closest('.task-cell')[0];
-        var hasStartDate = target.getAttribute('data-has-start-date') === 'true';
-        var hasDueDate = target.getAttribute('data-has-due-date') === 'true';
-
-        if (!issueId || !updateUrl || !sourceCell || (!hasStartDate && !hasDueDate) || isNaN(startJd) || isNaN(dueJd) || isNaN(anchorJd)) {
-          return;
-        }
-
-        event.preventDefault();
-        event.stopPropagation();
-
-        var preview = document.createElement('div');
-        preview.className = 'gantt-schedule-drag-preview mode-' + mode;
-        preview.setAttribute('data-issue-tooltip', issueId);
-        sourceCell.appendChild(preview);
-
-        activeDrag = {
-          target: target,
-          issueId: issueId,
-          mode: mode,
-          startClientX: event.clientX,
-          startJd: startJd,
-          dueJd: dueJd,
-          editStartJd: hasStartDate ? startJd : null,
-          editDueJd: hasDueDate ? dueJd : null,
-          hasStartDate: hasStartDate,
-          hasDueDate: hasDueDate,
-          anchorJd: anchorJd,
-          nextStartJd: startJd,
-          nextDueJd: dueJd,
-          nextRange: {
-            startJd: startJd,
-            dueJd: dueJd,
-            editStartJd: hasStartDate ? startJd : null,
-            editDueJd: hasDueDate ? dueJd : null
-          },
-          updateUrl: updateUrl,
-          preview: preview,
-          changed: false
-        };
-
-        $wrapper.addClass('gantt-schedule-dragging');
-        updatePreview(activeDrag, { startJd: startJd, dueJd: dueJd });
-        document.addEventListener('mousemove', onMouseMove);
-        document.addEventListener('mouseup', onMouseUp);
-      });
-    }
-
-    $(document).ready(function() {
-      var wrapperId = '<%= gantt_container_id %>';
-      var cellWidth = <%= cell_width %>;
-      var cellHeight = <%= cell_height %>;
-      var ganttEl = document.getElementById(wrapperId);
-
-      if (ganttEl) {
-        var initialScrollLeft = (<%= today_index %> - 25) * cellWidth;
-        var maxInitialScrollLeft = Math.max(ganttEl.scrollWidth - ganttEl.clientWidth, 0);
-        ganttEl.scrollLeft = Math.max(0, Math.min(initialScrollLeft, maxInitialScrollLeft));
-        ensureGanttSyncManager().register(ganttEl);
-      }
-
-      // 캐싱
-      var $wrapper = $('.mouseover-wrapper-' + wrapperId);
-      var cursorEl = $wrapper.find('[class*="cursor-container-"]')[0];
-      var $taskNameElements = $wrapper.find('.gantt-info-container .task-name');
-      var headerHeight = $taskNameElements.first().outerHeight() || <%= cell_height * 2 %>;
-      var wrapperOffsetTop = null;
-
-      setupGanttScheduleDrag($wrapper, ganttEl, cellWidth, cellHeight);
-
-      // 행 하이라이트 - 이벤트 위임
-      $wrapper.on('mouseenter', '.mouseover-' + wrapperId, function() {
-        var rows = $wrapper.find('.mouseover-' + wrapperId);
-        var rowIndex = rows.index(this);
-
-        // 좌측 정보 영역과 우측 간트 차트 영역의 행을 구분
-        if (rowIndex >= rows.length / 2) rowIndex = rowIndex - rows.length / 2;
-
-        // 현재 간트차트 내의 요소들만 선택
-        if ($taskNameElements.length > rowIndex + 1) { // +1은 헤더 제외
-          var targetElement = $taskNameElements[rowIndex + 1];
-          if (wrapperOffsetTop === null) wrapperOffsetTop = $wrapper.offset().top;
-          var rowTop = $(targetElement).offset().top - wrapperOffsetTop;
-          cursorEl.style.top = rowTop + 'px';
-          cursorEl.style.height = cellHeight + 'px';
-          cursorEl.style.display = 'block';
-          return;
-        }
-
-        // fallback
-        var rowTop = headerHeight + (rowIndex * cellHeight);
-        cursorEl.style.top = rowTop + 'px';
-        cursorEl.style.height = cellHeight + 'px';
-        cursorEl.style.display = 'block';
-      });
-
-      $wrapper.on('mouseleave', function() {
-        cursorEl.style.display = 'none';
-        wrapperOffsetTop = null; // lazy 캐싱 리셋
-      });
-
-      // 툴팁 기능
-      //setupTooltip();
-
-      var contextMenuTooltipGuardTimer = null;
-
-      function hideTxIssueTooltip() {
-        $('.tx-issue-tooltip, .tx-issue-tooltip-loading').hide();
-      }
-
-      function suppressTooltipWhileContextMenuOpen() {
-        var startedAt = Date.now();
-
-        if (contextMenuTooltipGuardTimer) {
-          clearTimeout(contextMenuTooltipGuardTimer);
-        }
-
-        var watchContextMenu = function() {
-          var contextMenuVisible = $('#context-menu').is(':visible');
-          hideTxIssueTooltip();
-
-          if (contextMenuVisible || Date.now() - startedAt < 1000) {
-            $wrapper.addClass('tx-issue-no-tooltip');
-            contextMenuTooltipGuardTimer = setTimeout(watchContextMenu, 150);
-          } else {
-            $wrapper.removeClass('tx-issue-no-tooltip');
-            contextMenuTooltipGuardTimer = null;
-          }
-        };
-
-        watchContextMenu();
-      }
-
-      // 간트 차트 우측 영역 컨텍스트 메뉴 지원
-      $wrapper.on('contextmenu', '[data-issue-tooltip]', function(event) {
-        var target = $(event.target);
-        if (target.is('a:not(.js-contextmenu)')) return;
-
-        var issueId = $(this).data('issue-tooltip');
-        if (!issueId) return;
-
-        var tr = $wrapper.find('#issue-' + issueId + '.hascontextmenu');
-        if (tr.length < 1) return;
-
-        event.preventDefault();
-        event.stopImmediatePropagation();
-        hideTxIssueTooltip();
-        $wrapper.addClass('tx-issue-no-tooltip');
-
-        if (!contextMenuIsSelected(tr)) {
-          contextMenuUnselectAll();
-          contextMenuAddSelection(tr);
-          contextMenuSetLastSelected(tr);
-        }
-        contextMenuShow(event);
-        suppressTooltipWhileContextMenuOpen();
-      });
-    });
-  })();
+  $(function() {
+    TxMilestoneGanttChart.init('<%= gantt_container_id %>');
+  });
 </script>

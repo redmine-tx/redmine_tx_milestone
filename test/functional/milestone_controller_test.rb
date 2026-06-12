@@ -225,4 +225,84 @@ class MilestoneControllerTest < Redmine::ControllerTest
     assert_equal second_original_start_date, second_issue.reload.start_date
     assert_equal second_original_due_date, second_issue.due_date
   end
+
+  def test_gantt_renders_version_list
+    get :gantt, params: { project_id: 'ecookbook' }
+
+    assert_response :success
+  end
+
+  def test_gantt_renders_visible_issue
+    get :gantt, params: { project_id: 'ecookbook', issue_id: 1 }
+
+    assert_response :success
+    assert_select '.gantt-container'
+  end
+
+  def test_gantt_returns_404_for_invisible_issue
+    private_project = Project.generate!(is_public: false)
+    invisible_issue = Issue.generate!(project: private_project)
+    assert_not invisible_issue.visible?(User.find(2))
+
+    get :gantt, params: { project_id: 'ecookbook', issue_id: invisible_issue.id }
+
+    assert_response :not_found
+  end
+
+  def test_gantt_returns_404_for_unshared_version
+    foreign_version = Version.find(5) # 비공개 프로젝트(OnlineStore) 소속, 공유 안 됨
+    assert_not Project.find(1).shared_versions.include?(foreign_version)
+
+    get :gantt, params: { project_id: 'ecookbook', version_id: foreign_version.id }
+
+    assert_response :not_found
+  end
+
+  def test_dashboard_returns_404_for_unshared_version
+    foreign_version = Version.find(5)
+    assert_not Project.find(1).shared_versions.include?(foreign_version)
+
+    get :dashboard, params: { project_id: 'ecookbook', version_id: foreign_version.id }
+
+    assert_response :not_found
+  end
+
+  def test_tetris_save_schedule_rejects_invisible_issue
+    private_project = Project.generate!(is_public: false)
+    invisible_issue = Issue.generate!(project: private_project, start_date: Date.today, due_date: Date.today + 1.day)
+    original_start_date = invisible_issue.start_date
+
+    post :tetris, params: {
+      project_id: 'ecookbook',
+      user_id: 2,
+      save_schedule: 'true',
+      issue_data: [{ id: invisible_issue.id, start_date: (Date.today + 5.days).iso8601, due_date: (Date.today + 6.days).iso8601 }].to_json
+    }
+
+    assert flash[:error].present?
+    assert_equal original_start_date, invisible_issue.reload.start_date
+  end
+
+  def test_api_sync_parent_date_skips_issues_without_edit_permission
+    parent = Issue.generate!(project_id: 1, due_date: Date.today)
+    Issue.generate!(project_id: 1, parent_issue_id: parent.id, due_date: Date.today + 10.days)
+    Role.find(1).remove_permission! :edit_issues
+    # 파생 일정 설정 등으로 자식 생성 시 부모 날짜가 이미 바뀌었을 수 있으므로 요청 직전 상태를 기준으로 검증
+    due_date_before_request = parent.reload.due_date
+
+    post :api_sync_parent_date, params: { project_id: 'ecookbook', ids: [parent.id] }
+
+    assert_response :success
+    body = JSON.parse(response.body)
+    assert_include '권한 없는', body['message']
+    assert_equal due_date_before_request, parent.reload.due_date
+  end
+
+  def test_apply_predict_issue_requires_edit_permission
+    Role.find(1).remove_permission! :edit_issues
+
+    post :apply_predict_issue, params: { issue_id: 1 }
+
+    assert_response :forbidden
+  end
 end
