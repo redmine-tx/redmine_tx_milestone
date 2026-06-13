@@ -160,16 +160,23 @@
       color: #666;
       font-size: 0.9em;
     }
-    .schedule-chart-controls {
-      margin: 12px 0 8px;
-      color: #555;
-      font-size: 0.95em;
+    .schedule-team-expand-control {
+      margin-top: 6px;
     }
-    .schedule-chart-controls label {
-      display: inline-flex;
-      align-items: center;
-      gap: 4px;
-      font-weight: normal;
+    .schedule-team-expand-toggle {
+      border: 1px solid #bbb;
+      border-radius: 3px;
+      background: #f7f7f7;
+      color: #333;
+      cursor: pointer;
+      font-size: 0.85em;
+      line-height: 1.2;
+      padding: 2px 6px;
+      white-space: nowrap;
+    }
+    .schedule-team-expand-toggle:hover {
+      background: #fff;
+      border-color: #777;
     }
     .schedule-summary-result {
       --vacation-x-line-half-width: 0.5px;
@@ -508,15 +515,6 @@ end
 
   <div class="schedule-summary-result">
     <% if result_data.any? %>
-      <% hidden_teammate_count = hidden_teammates_by_group.values.flatten.size %>
-      <% if summary_mode == 'issue' && hidden_teammate_count > 0 %>
-        <div class="schedule-chart-controls">
-          <label for="show-hidden-teammates">
-            <input type="checkbox" id="show-hidden-teammates">
-            비관여 팀원도 표시 (<%= hidden_teammate_count %>명)
-          </label>
-        </div>
-      <% end %>
       <!-- 타임라인 그리드 -->
       <div id="timeline-grid-container" style="margin: 20px 0;"></div>
       <% if full_day_vacation_map.any? %>
@@ -943,6 +941,7 @@ $(document).ready(function() {
   };
   var hiddenTeammateEventsByCategoryIndex = {};
   var currentJsonData = null;
+  var expandedCategoryIndexes = {};
   var fullDayVacationMap = <%= full_day_vacation_map.to_json.html_safe %>;
   
   <% result_data.each_with_index do |(group, users_issues), category_index| %>
@@ -1070,18 +1069,19 @@ $(document).ready(function() {
     return JSON.parse(JSON.stringify(data));
   }
 
-  function buildTimelineData(showHiddenTeammates) {
+  function buildTimelineData(expandedIndexes) {
     var data = cloneTimelineData(jsonDataBase);
+    expandedIndexes = expandedIndexes || {};
 
-    if (showHiddenTeammates) {
-      Object.keys(hiddenTeammateEventsByCategoryIndex).forEach(function(categoryIndexKey) {
-        var categoryIndex = parseInt(categoryIndexKey, 10);
-        if (isNaN(categoryIndex) || !data.categories[categoryIndex]) return;
+    Object.keys(expandedIndexes).forEach(function(categoryIndexKey) {
+      if (!expandedIndexes[categoryIndexKey]) return;
 
-        var hiddenEvents = cloneTimelineData(hiddenTeammateEventsByCategoryIndex[categoryIndexKey] || []);
-        data.categories[categoryIndex].events = data.categories[categoryIndex].events.concat(hiddenEvents);
-      });
-    }
+      var categoryIndex = parseInt(categoryIndexKey, 10);
+      if (isNaN(categoryIndex) || !data.categories[categoryIndex]) return;
+
+      var hiddenEvents = cloneTimelineData(hiddenTeammateEventsByCategoryIndex[categoryIndexKey] || []);
+      data.categories[categoryIndex].events = data.categories[categoryIndex].events.concat(hiddenEvents);
+    });
 
     data.categories.forEach(function(category) {
       category.events.forEach(function(event) {
@@ -1092,16 +1092,50 @@ $(document).ready(function() {
     return data;
   }
 
-  function renderTimeline(showHiddenTeammates, scrollBehavior) {
-    currentJsonData = buildTimelineData(showHiddenTeammates);
-    TxTimelineGrid.render('#timeline-grid-container', currentJsonData, { verticalMarkers: <%= version_markers.to_json.html_safe %>, scrollToToday: true, scrollAlign: 'center', scrollBehavior: scrollBehavior || 'auto' });
-    decorateFullDayVacationCells('#timeline-grid-container', currentJsonData, fullDayVacationMap);
+  function injectTeamExpandControls() {
+    var container = document.getElementById('timeline-grid-container');
+    if (!container) return;
+
+    Object.keys(hiddenTeammateEventsByCategoryIndex).forEach(function(categoryIndexKey) {
+      var hiddenCount = (hiddenTeammateEventsByCategoryIndex[categoryIndexKey] || []).length;
+      if (hiddenCount === 0) return;
+
+      var row = container.querySelector('tbody tr.tx-category-start[data-category="' + categoryIndexKey + '"]');
+      if (!row) return;
+
+      var categoryCell = row.querySelector('td.tx-category-cell');
+      if (!categoryCell) return;
+
+      var isExpanded = !!expandedCategoryIndexes[categoryIndexKey];
+      var control = document.createElement('div');
+      control.className = 'schedule-team-expand-control';
+
+      var button = document.createElement('button');
+      button.type = 'button';
+      button.className = 'schedule-team-expand-toggle';
+      button.setAttribute('aria-expanded', isExpanded ? 'true' : 'false');
+      button.title = isExpanded ? '비관여 팀원 숨기기' : '이 팀의 비관여 팀원 표시';
+      button.textContent = isExpanded ? '- 비관여 ' + hiddenCount + '명' : '+ 비관여 ' + hiddenCount + '명';
+      button.addEventListener('click', function(event) {
+        event.preventDefault();
+        expandedCategoryIndexes[categoryIndexKey] = !expandedCategoryIndexes[categoryIndexKey];
+        renderTimeline('auto');
+      });
+
+      control.appendChild(button);
+      categoryCell.appendChild(control);
+    });
   }
 
-  var $showHiddenTeammates = $('#show-hidden-teammates');
+  function renderTimeline(scrollBehavior) {
+    currentJsonData = buildTimelineData(expandedCategoryIndexes);
+    TxTimelineGrid.render('#timeline-grid-container', currentJsonData, { verticalMarkers: <%= version_markers.to_json.html_safe %>, scrollToToday: true, scrollAlign: 'center', scrollBehavior: scrollBehavior || 'auto' });
+    decorateFullDayVacationCells('#timeline-grid-container', currentJsonData, fullDayVacationMap);
+    injectTeamExpandControls();
+  }
 
   try {
-    renderTimeline($showHiddenTeammates.is(':checked'), 'auto');
+    renderTimeline('auto');
     console.log('타임라인 그리드 렌더링 완료');
     
     // 렌더링 후 페이지 상단(폼 위치)으로 즉시 스크롤
@@ -1110,15 +1144,6 @@ $(document).ready(function() {
     console.error('타임라인 그리드 렌더링 오류:', error);
     $('#timeline-grid-container').html('<div class="no-result">타임라인 렌더링 중 오류가 발생했습니다.</div>');
   }
-
-  $showHiddenTeammates.on('change', function() {
-    try {
-      renderTimeline(this.checked, 'auto');
-    } catch (error) {
-      console.error('타임라인 그리드 렌더링 오류:', error);
-      $('#timeline-grid-container').html('<div class="no-result">타임라인 렌더링 중 오류가 발생했습니다.</div>');
-    }
-  });
   
   // 스케줄 클릭 이벤트 (선택적)
   document.getElementById('timeline-grid-container').addEventListener('tx-schedule-click', function(e) {
@@ -1140,7 +1165,7 @@ $(document).ready(function() {
                     String(today.getDate()).padStart(2, '0');
       var fileName = '일정요약_' + dateStr;
 
-      TxXlsxExporter.exportToXlsx(currentJsonData || buildTimelineData($showHiddenTeammates.is(':checked')), fileName)
+      TxXlsxExporter.exportToXlsx(currentJsonData || buildTimelineData(expandedCategoryIndexes), fileName)
         .then(function() {
           console.log('엑셀 다운로드 완료');
         })
