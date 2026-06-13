@@ -28,6 +28,26 @@ class MilestoneControllerTest < Redmine::ControllerTest
     EnabledModule.create!(project_id: 1, name: 'redmine_tx_milestone') unless EnabledModule.exists?(project_id: 1, name: 'redmine_tx_milestone')
   end
 
+  def test_schedule_summary_group_ids_are_ignored_for_issue_mode
+    @controller.params = ActionController::Parameters.new(issue_ids: '1', group_ids: ['2', '3'])
+
+    assert_equal 'issue', @controller.send(:schedule_summary_mode)
+    assert_equal [], @controller.send(:schedule_summary_group_ids)
+  end
+
+  def test_schedule_summary_group_ids_accept_empty_team_selection
+    @controller.params = ActionController::Parameters.new(summary_mode: 'team', group_ids: [''])
+
+    assert_equal 'team', @controller.send(:schedule_summary_mode)
+    assert_equal [], @controller.send(:schedule_summary_group_ids)
+  end
+
+  def test_schedule_summary_group_ids_parse_team_selection
+    @controller.params = ActionController::Parameters.new(summary_mode: 'team', group_ids: ['', '2', '3', '2'])
+
+    assert_equal [2, 3], @controller.send(:schedule_summary_group_ids)
+  end
+
   def test_update_issue_schedule_updates_dates
     issue = Issue.find(1)
     new_start_date = issue.start_date + 1.day

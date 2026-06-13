@@ -1114,6 +1114,8 @@ class MilestoneController < ApplicationController
     end
 
     def schedule_summary_group_ids
+      return [] unless schedule_summary_mode == 'team'
+
       raw_values =
         if params.key?(:group_ids) || params.key?('group_ids')
           params[:group_ids]

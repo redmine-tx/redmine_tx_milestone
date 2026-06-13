@@ -1114,15 +1114,19 @@ $(document).ready(function() {
       </div>
 
       <!-- 오른쪽 컬럼: 팀 선택 -->
-      <div style="flex: 1;">
+      <div id="team-summary-fields" style="flex: 1; <%= 'display: none;' if summary_mode == 'issue' %>">
         <div class="form-group">
           <label for="group_ids">팀 선택 (다중 선택 가능)</label>
+          <input type="hidden" name="group_ids[]" value="">
           <select name="group_ids[]" id="group_ids" multiple style="min-height: 150px;">
             <% all_groups.each do |group| %>
               <option value="<%= group.id %>" <%= 'selected' if selected_group_ids.include?(group.id) %>><%= group.name %></option>
             <% end %>
           </select>
-          <div class="hint">팀을 선택하지 않으면 전체 팀 기준으로 요약됩니다. 일감 ID 기준에서는 선택 팀만 필터링합니다. Ctrl/Cmd 키를 누르고 클릭하여 여러 팀을 선택할 수 있습니다.</div>
+          <div style="margin-top: 6px;">
+            <button type="button" id="clear-group-selection" class="button">팀 선택 해제</button>
+          </div>
+          <div class="hint">팀 기준에서만 사용됩니다. 팀을 선택하지 않으면 전체 팀 기준으로 요약됩니다. Ctrl/Cmd 키를 누르고 클릭하여 여러 팀을 선택할 수 있습니다.</div>
         </div>
       </div>
     </div>
@@ -1162,8 +1166,10 @@ $(document).ready(function() {
 
     var $modeInput = $('#summary_mode');
     var $issueFields = $('#issue-summary-fields');
+    var $teamFields = $('#team-summary-fields');
     var $issueInput = $('#issue_ids');
     var $groupSelect = $('#group_ids');
+    var $clearGroupSelection = $('#clear-group-selection');
 
     function setCookie(name, value) {
       document.cookie = name + '=' + (value || '') + '; path=/; max-age=31536000; SameSite=Lax';
@@ -1189,18 +1195,29 @@ $(document).ready(function() {
       return $groupSelect.val() || [];
     }
 
+    function restoreStoredGroups() {
+      var storedGroups = getStoredValue(groupStorageKey);
+      if (storedGroups !== null) {
+        $groupSelect.val(storedGroups.length ? storedGroups.split(',') : []);
+      }
+    }
+
     function persistMode(mode) {
       setStoredValue(modeStorageKey, mode);
       setCookie(modeCookieName, mode);
     }
 
     function persistGroups() {
+      if ($modeInput.val() !== 'team') {
+        return;
+      }
       var groupIds = selectedGroupIds().join(',');
       setStoredValue(groupStorageKey, groupIds);
       setCookie(groupCookieName, groupIds);
     }
 
-    function applyMode(mode) {
+    function applyMode(mode, options) {
+      options = options || {};
       var normalizedMode = mode === 'team' ? 'team' : 'issue';
       $modeInput.val(normalizedMode);
       $('.schedule-summary-mode-tab').removeClass('selected');
@@ -1209,16 +1226,23 @@ $(document).ready(function() {
       if (normalizedMode === 'team') {
         $issueFields.hide();
         $issueInput.prop('disabled', true);
+        $teamFields.show();
+        $groupSelect.prop('disabled', false);
+        if (options.restoreGroups) {
+          restoreStoredGroups();
+        }
       } else {
         $issueInput.prop('disabled', false);
         $issueFields.show();
+        $teamFields.hide();
+        $groupSelect.prop('disabled', true).val([]);
       }
     }
 
     if (!hasModeParam && !hasServerSummary) {
       var storedMode = getStoredValue(modeStorageKey);
       if (storedMode === 'issue' || storedMode === 'team') {
-        applyMode(storedMode);
+        applyMode(storedMode, { restoreGroups: storedMode === 'team' });
         persistMode(storedMode);
       }
     } else {
@@ -1226,23 +1250,27 @@ $(document).ready(function() {
       persistMode($modeInput.val());
     }
 
-    if (!hasGroupParam && !hasServerSummary) {
-      var storedGroups = getStoredValue(groupStorageKey);
-      if (storedGroups !== null) {
-        $groupSelect.val(storedGroups.length ? storedGroups.split(',') : []);
-      }
+    if ($modeInput.val() === 'team' && !hasGroupParam && !hasServerSummary) {
+      restoreStoredGroups();
     }
-    persistGroups();
+    if ($modeInput.val() === 'team') {
+      persistGroups();
+    }
 
     $('.schedule-summary-mode-tab').on('click', function(event) {
       event.preventDefault();
       var mode = $(this).data('mode') === 'team' ? 'team' : 'issue';
-      applyMode(mode);
+      applyMode(mode, { restoreGroups: mode === 'team' });
       persistMode(mode);
+      persistGroups();
     });
 
     $groupSelect.on('change', function() {
       persistGroups();
+    });
+
+    $clearGroupSelection.on('click', function() {
+      $groupSelect.val([]).trigger('change');
     });
 
     $('#schedule-summary-form').on('submit', function() {
