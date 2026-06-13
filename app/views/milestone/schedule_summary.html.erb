@@ -160,6 +160,17 @@
       color: #666;
       font-size: 0.9em;
     }
+    .schedule-chart-controls {
+      margin: 12px 0 8px;
+      color: #555;
+      font-size: 0.95em;
+    }
+    .schedule-chart-controls label {
+      display: inline-flex;
+      align-items: center;
+      gap: 4px;
+      font-weight: normal;
+    }
     .schedule-summary-result {
       --vacation-x-line-half-width: 0.5px;
     }
@@ -401,7 +412,24 @@ end
     result_data[group] = group_users_issues if group_users_issues.any?
   end
 
-  displayed_user_logins = result_data.values.flat_map { |users_issues| users_issues.keys.map(&:login) }.to_set
+  hidden_teammates_by_group = {}
+  if summary_mode == 'issue'
+    hidden_registered_user_ids = registered_user_ids.dup
+    result_data.keys.each do |group|
+      hidden_users = group.users
+                          .sort_by(&:name)
+                          .reject { |user| hidden_registered_user_ids.include?(user.id) }
+      hidden_users.each { |user| hidden_registered_user_ids.add(user.id) }
+      hidden_teammates_by_group[group] = hidden_users if hidden_users.any?
+    end
+  end
+
+  timeline_users = (
+    result_data.values.flat_map { |users_issues| users_issues.keys } +
+    hidden_teammates_by_group.values.flatten
+  ).uniq { |user| user.id }
+  timeline_user_ids = timeline_users.map(&:id)
+  displayed_user_logins = timeline_users.map(&:login).to_set
   full_day_vacation_map = {}
   if displayed_user_logins.any? && defined?(TxBaseHelper::UserVacationApi) && TxBaseHelper::UserVacationApi.available?
     full_day_statuses = %w[휴가 휴직 병가]
@@ -428,9 +456,9 @@ end
   displayed_issue_ids = filtered_issue_list.select(&:assigned_to_id).map(&:id)
 
   # 사용자별 다른 일감 (배경 일정) — 사용자당 1쿼리 대신 단일 쿼리 + 가시성 스코프
-  background_issues_by_user = if user_ids.any?
+  background_issues_by_user = if timeline_user_ids.any?
     Issue.visible
-         .where(assigned_to_id: user_ids)
+         .where(assigned_to_id: timeline_user_ids)
          .where.not(id: displayed_issue_ids)
          .where.not(start_date: nil)
          .where.not(due_date: nil)
@@ -480,6 +508,15 @@ end
 
   <div class="schedule-summary-result">
     <% if result_data.any? %>
+      <% hidden_teammate_count = hidden_teammates_by_group.values.flatten.size %>
+      <% if summary_mode == 'issue' && hidden_teammate_count > 0 %>
+        <div class="schedule-chart-controls">
+          <label for="show-hidden-teammates">
+            <input type="checkbox" id="show-hidden-teammates">
+            비관여 팀원도 표시 (<%= hidden_teammate_count %>명)
+          </label>
+        </div>
+      <% end %>
       <!-- 타임라인 그리드 -->
       <div id="timeline-grid-container" style="margin: 20px 0;"></div>
       <% if full_day_vacation_map.any? %>
@@ -892,7 +929,7 @@ $(document).ready(function() {
   }
   
   // JSON 데이터 구성 (타임라인 그리드 + 엑셀 공용)
-  var jsonData = {
+  var jsonDataBase = {
     options: {
       categoryLabel: "팀",
       eventLabel: "담당자",
@@ -904,9 +941,11 @@ $(document).ready(function() {
     categories: [],
     legends: []
   };
+  var hiddenTeammateEventsByCategoryIndex = {};
+  var currentJsonData = null;
   var fullDayVacationMap = <%= full_day_vacation_map.to_json.html_safe %>;
   
-  <% result_data.each do |group, users_issues| %>
+  <% result_data.each_with_index do |(group, users_issues), category_index| %>
     var category = {
       name: "<%= j(group.name) %>",
       customColor: null,
@@ -975,32 +1014,94 @@ $(document).ready(function() {
       
       category.events.push(event);
     <% end %>
+
+    <% if summary_mode == 'issue' && hidden_teammates_by_group[group].present? %>
+      hiddenTeammateEventsByCategoryIndex[<%= category_index %>] = [];
+      <% hidden_teammates_by_group[group].each do |user| %>
+        var hiddenEvent = {
+          name: "<%= j(user.name) %>",
+          login: "<%= j(user.login) %>",
+          link: "<%= url_for(controller: 'users', action: 'show', id: user.id, only_path: false) %>",
+          schedules: []
+        };
+
+        <% if background_issues_by_user[user.id] %>
+          <% background_issues_by_user[user.id].sort_by(&:start_date).each do |bg_issue| %>
+            <%
+              bg_status_id = bg_issue.status_id
+              bg_in_progress_status_ids = IssueStatus.new_ids + IssueStatus.in_progress_ids + IssueStatus.in_review_ids
+              bg_is_in_progress = bg_in_progress_status_ids.include?(bg_status_id)
+              bg_font_color = bg_is_in_progress ? "#555555" : "#AAAAAA"
+            %>
+            hiddenEvent.schedules.push({
+              name: "<%= j("##{bg_issue.id} : #{bg_issue.subject}") %>",
+              startDate: "<%= bg_issue.start_date.strftime('%Y-%m-%d') %>",
+              endDate: "<%= bg_issue.due_date.strftime('%Y-%m-%d') %>",
+              issue: "#<%= bg_issue.id %>",
+              issueId: "<%= bg_issue.id %>",
+              doneRatio: "<%= bg_issue.done_ratio || 0 %>",
+              link: "<%= url_for(controller: 'issues', action: 'show', id: bg_issue.id, only_path: false) %>",
+              customColor: "#e0e0e0",
+              customFontColor: "<%= bg_font_color %>",
+              isMuted: true
+            });
+          <% end %>
+        <% end %>
+
+        hiddenTeammateEventsByCategoryIndex[<%= category_index %>].push(hiddenEvent);
+      <% end %>
+    <% end %>
     
-    jsonData.categories.push(category);
+    jsonDataBase.categories.push(category);
   <% end %>
   
   // 범례 정보 추가 (메인 일감별 색상)
   <% if main_issue_colors.any? %>
     <% legend_issues.each do |main_issue| %>
-      jsonData.legends.push({
+      jsonDataBase.legends.push({
         title: "<%= j("##{main_issue.id} : #{main_issue.subject.truncate(30)}") %>",
         color: "<%= main_issue_colors[main_issue.id] %>",
         url: "<%= url_for(controller: 'issues', action: 'show', id: main_issue.id, only_path: false) %>"
       });
     <% end %>
   <% end %>
-  
-  // 각 이벤트의 스케줄에 대해 오버랩 처리
-  jsonData.categories.forEach(function(category) {
-    category.events.forEach(function(event) {
-      event.schedules = resolveScheduleOverlaps(event.schedules);
+
+  function cloneTimelineData(data) {
+    return JSON.parse(JSON.stringify(data));
+  }
+
+  function buildTimelineData(showHiddenTeammates) {
+    var data = cloneTimelineData(jsonDataBase);
+
+    if (showHiddenTeammates) {
+      Object.keys(hiddenTeammateEventsByCategoryIndex).forEach(function(categoryIndexKey) {
+        var categoryIndex = parseInt(categoryIndexKey, 10);
+        if (isNaN(categoryIndex) || !data.categories[categoryIndex]) return;
+
+        var hiddenEvents = cloneTimelineData(hiddenTeammateEventsByCategoryIndex[categoryIndexKey] || []);
+        data.categories[categoryIndex].events = data.categories[categoryIndex].events.concat(hiddenEvents);
+      });
+    }
+
+    data.categories.forEach(function(category) {
+      category.events.forEach(function(event) {
+        event.schedules = resolveScheduleOverlaps(event.schedules);
+      });
     });
-  });
-  
-  // 타임라인 그리드 렌더링
+
+    return data;
+  }
+
+  function renderTimeline(showHiddenTeammates, scrollBehavior) {
+    currentJsonData = buildTimelineData(showHiddenTeammates);
+    TxTimelineGrid.render('#timeline-grid-container', currentJsonData, { verticalMarkers: <%= version_markers.to_json.html_safe %>, scrollToToday: true, scrollAlign: 'center', scrollBehavior: scrollBehavior || 'auto' });
+    decorateFullDayVacationCells('#timeline-grid-container', currentJsonData, fullDayVacationMap);
+  }
+
+  var $showHiddenTeammates = $('#show-hidden-teammates');
+
   try {
-    TxTimelineGrid.render('#timeline-grid-container', jsonData, { verticalMarkers: <%= version_markers.to_json.html_safe %>, scrollToToday: true, scrollAlign: 'center', scrollBehavior: 'auto' });
-    decorateFullDayVacationCells('#timeline-grid-container', jsonData, fullDayVacationMap);
+    renderTimeline($showHiddenTeammates.is(':checked'), 'auto');
     console.log('타임라인 그리드 렌더링 완료');
     
     // 렌더링 후 페이지 상단(폼 위치)으로 즉시 스크롤
@@ -1009,6 +1110,15 @@ $(document).ready(function() {
     console.error('타임라인 그리드 렌더링 오류:', error);
     $('#timeline-grid-container').html('<div class="no-result">타임라인 렌더링 중 오류가 발생했습니다.</div>');
   }
+
+  $showHiddenTeammates.on('change', function() {
+    try {
+      renderTimeline(this.checked, 'auto');
+    } catch (error) {
+      console.error('타임라인 그리드 렌더링 오류:', error);
+      $('#timeline-grid-container').html('<div class="no-result">타임라인 렌더링 중 오류가 발생했습니다.</div>');
+    }
+  });
   
   // 스케줄 클릭 이벤트 (선택적)
   document.getElementById('timeline-grid-container').addEventListener('tx-schedule-click', function(e) {
@@ -1016,7 +1126,9 @@ $(document).ready(function() {
   });
 
   $(window).off('resize.scheduleSummaryVacation').on('resize.scheduleSummaryVacation', function() {
-    decorateFullDayVacationCells('#timeline-grid-container', jsonData, fullDayVacationMap);
+    if (currentJsonData) {
+      decorateFullDayVacationCells('#timeline-grid-container', currentJsonData, fullDayVacationMap);
+    }
   });
   
   // XLSX 다운로드 버튼
@@ -1028,7 +1140,7 @@ $(document).ready(function() {
                     String(today.getDate()).padStart(2, '0');
       var fileName = '일정요약_' + dateStr;
 
-      TxXlsxExporter.exportToXlsx(jsonData, fileName)
+      TxXlsxExporter.exportToXlsx(currentJsonData || buildTimelineData($showHiddenTeammates.is(':checked')), fileName)
         .then(function() {
           console.log('엑셀 다운로드 완료');
         })

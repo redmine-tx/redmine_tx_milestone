@@ -48,6 +48,14 @@ class MilestoneControllerTest < Redmine::ControllerTest
     assert_equal [2, 3], @controller.send(:schedule_summary_group_ids)
   end
 
+  def test_schedule_summary_issue_mode_renders
+    get :schedule_summary, params: { project_id: 'ecookbook', issue_ids: '1' }
+
+    assert_response :success
+    assert_select '#issue-summary-fields'
+    assert_select '#team-summary-fields'
+  end
+
   def test_update_issue_schedule_updates_dates
     issue = Issue.find(1)
     new_start_date = issue.start_date + 1.day
