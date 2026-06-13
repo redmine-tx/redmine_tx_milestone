@@ -19,8 +19,9 @@
   }
 
   in_progress_status_ids = IssueStatus.new_ids + IssueStatus.in_progress_ids + IssueStatus.in_review_ids
+  hidden_teammate_events_by_category_index = {}
 
-  summary[:result_data].each do |group, users_issues|
+  summary[:result_data].each_with_index do |(group, users_issues), category_index|
     category = {
       name: group.name,
       customColor: nil,
@@ -72,6 +73,35 @@
       category[:events] << event
     end
 
+    Array(summary[:hidden_teammates_by_group][group]).each do |user|
+      hidden_teammate_events_by_category_index[category_index] ||= []
+
+      event = {
+        name: user.name,
+        login: user.login,
+        link: user_path(user),
+        schedules: []
+      }
+
+      Array(summary[:background_issues_by_user][user.id]).sort_by(&:start_date).each do |background_issue|
+        background_in_progress = in_progress_status_ids.include?(background_issue.status_id)
+        event[:schedules] << {
+          name: "##{background_issue.id} : #{background_issue.subject}",
+          startDate: background_issue.start_date.strftime('%Y-%m-%d'),
+          endDate: background_issue.due_date.strftime('%Y-%m-%d'),
+          issue: "##{background_issue.id}",
+          issueId: background_issue.id.to_s,
+          doneRatio: background_issue.done_ratio || 0,
+          link: issue_path(background_issue),
+          customColor: '#e0e0e0',
+          customFontColor: background_in_progress ? '#555555' : '#AAAAAA',
+          isMuted: true
+        }
+      end
+
+      hidden_teammate_events_by_category_index[category_index] << event
+    end
+
     json_data[:categories] << category
   end
 
@@ -113,6 +143,21 @@
     font-style: italic;
     padding: 12px;
     text-align: center;
+  }
+
+  .tx-milestone-issue-schedule-summary .schedule-team-expand-control {
+    margin-left: 4px;
+    white-space: nowrap;
+  }
+
+  .tx-milestone-issue-schedule-summary .schedule-team-expand-toggle {
+    cursor: pointer;
+    font-size: 0.9em;
+    font-weight: normal;
+  }
+
+  .tx-milestone-issue-schedule-summary .schedule-team-expand-toggle:hover {
+    text-decoration: underline;
   }
 
   .tx-milestone-issue-schedule-summary {
@@ -258,7 +303,10 @@ $(function() {
   $panel.show();
 
   <% if summary[:result_data].any? %>
-  var jsonData = <%= raw json_escape(json_data.to_json) %>;
+  var jsonDataBase = <%= raw json_escape(json_data.to_json) %>;
+  var hiddenTeammateEventsByCategoryIndex = <%= raw json_escape(hidden_teammate_events_by_category_index.to_json) %>;
+  var expandedCategoryIndexes = {};
+  var currentJsonData = null;
   var fullDayVacationMap = <%= raw json_escape(summary[:full_day_vacation_map].to_json) %>;
   var verticalMarkers = <%= raw json_escape(summary[:version_markers].to_json) %>;
   var timelineSelector = '#<%= j timeline_container_id %>';
@@ -476,31 +524,95 @@ $(function() {
     });
   }
 
-  jsonData.categories.forEach(function(category) {
-    category.events.forEach(function(event) {
-      event.schedules = resolveScheduleOverlaps(event.schedules);
+  function cloneTimelineData(data) {
+    return JSON.parse(JSON.stringify(data));
+  }
+
+  function buildTimelineData(expandedIndexes) {
+    var data = cloneTimelineData(jsonDataBase);
+    expandedIndexes = expandedIndexes || {};
+
+    Object.keys(expandedIndexes).forEach(function(categoryIndexKey) {
+      if (!expandedIndexes[categoryIndexKey]) return;
+
+      var categoryIndex = parseInt(categoryIndexKey, 10);
+      if (isNaN(categoryIndex) || !data.categories[categoryIndex]) return;
+
+      var hiddenEvents = cloneTimelineData(hiddenTeammateEventsByCategoryIndex[categoryIndexKey] || []);
+      data.categories[categoryIndex].events = data.categories[categoryIndex].events.concat(hiddenEvents);
     });
-  });
+
+    data.categories.forEach(function(category) {
+      category.events.forEach(function(event) {
+        event.schedules = resolveScheduleOverlaps(event.schedules);
+      });
+    });
+
+    return data;
+  }
+
+  function injectTeamExpandControls() {
+    var container = document.querySelector(timelineSelector);
+    if (!container) return;
+
+    Object.keys(hiddenTeammateEventsByCategoryIndex).forEach(function(categoryIndexKey) {
+      var hiddenCount = (hiddenTeammateEventsByCategoryIndex[categoryIndexKey] || []).length;
+      if (hiddenCount === 0) return;
+
+      var row = container.querySelector('tbody tr.tx-category-start[data-category="' + categoryIndexKey + '"]');
+      if (!row) return;
+
+      var categoryCell = row.querySelector('td.tx-category-cell');
+      if (!categoryCell) return;
+
+      var isExpanded = !!expandedCategoryIndexes[categoryIndexKey];
+      var control = document.createElement('span');
+      control.className = 'schedule-team-expand-control';
+
+      var toggleLink = document.createElement('a');
+      toggleLink.href = '#';
+      toggleLink.className = 'schedule-team-expand-toggle';
+      toggleLink.setAttribute('aria-expanded', isExpanded ? 'true' : 'false');
+      toggleLink.title = isExpanded ? '비관여 팀원 숨기기' : '이 팀의 비관여 팀원 표시';
+      toggleLink.textContent = isExpanded ? '(-' + hiddenCount + ')' : '(+' + hiddenCount + ')';
+      toggleLink.addEventListener('click', function(event) {
+        event.preventDefault();
+        expandedCategoryIndexes[categoryIndexKey] = !expandedCategoryIndexes[categoryIndexKey];
+        renderTimeline('auto');
+      });
+
+      control.appendChild(toggleLink);
+      categoryCell.appendChild(control);
+    });
+  }
+
+  function renderTimeline(scrollBehavior) {
+    currentJsonData = buildTimelineData(expandedCategoryIndexes);
+    TxTimelineGrid.render(timelineSelector, currentJsonData, {
+      verticalMarkers: verticalMarkers,
+      scrollToToday: true,
+      scrollAlign: 'center',
+      scrollBehavior: scrollBehavior || 'auto'
+    });
+    decorateFullDayVacationCells(timelineSelector, currentJsonData, fullDayVacationMap);
+    injectTeamExpandControls();
+  }
 
   try {
     if (!window.TxTimelineGrid) {
       throw new Error('TxTimelineGrid is not loaded');
     }
 
-    TxTimelineGrid.render(timelineSelector, jsonData, {
-      verticalMarkers: verticalMarkers,
-      scrollToToday: true,
-      scrollAlign: 'center',
-      scrollBehavior: 'auto'
-    });
-    decorateFullDayVacationCells(timelineSelector, jsonData, fullDayVacationMap);
+    renderTimeline('auto');
   } catch (error) {
     $(timelineSelector).html('<div class="tx-schedule-summary-empty">타임라인 렌더링 중 오류가 발생했습니다.</div>');
     if (window.console && console.error) console.error('일정요약 타임라인 렌더링 오류:', error);
   }
 
   $(window).off('resize.<%= j resize_namespace %>').on('resize.<%= j resize_namespace %>', function() {
-    decorateFullDayVacationCells(timelineSelector, jsonData, fullDayVacationMap);
+    if (currentJsonData) {
+      decorateFullDayVacationCells(timelineSelector, currentJsonData, fullDayVacationMap);
+    }
   });
   <% end %>
 });

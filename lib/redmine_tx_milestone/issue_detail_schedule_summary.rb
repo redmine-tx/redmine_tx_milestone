@@ -35,8 +35,10 @@ module RedmineTxMilestone
       timeline_start_date = display_start_date
       timeline_end_date = (filtered_issue_list.filter_map(&:due_date).max || Date.today) + 60.days
       holidays = holidays_for(timeline_start_date, timeline_end_date)
-      result_data, users = grouped_user_issues(assigned_issue_list)
-      background_issues_by_user = background_issues_for(users.keys, assigned_issue_list, timeline_start_date)
+      result_data, users, registered_user_ids = grouped_user_issues(assigned_issue_list)
+      hidden_teammates_by_group = hidden_teammates_by_group(result_data, registered_user_ids)
+      timeline_users = (result_data.values.flat_map(&:keys) + hidden_teammates_by_group.values.flatten).uniq(&:id)
+      background_issues_by_user = background_issues_for(timeline_users.map(&:id), assigned_issue_list, timeline_start_date)
 
       {
         root_issue: root_issue,
@@ -47,8 +49,9 @@ module RedmineTxMilestone
         main_issue_colors: main_issue_colors,
         issue_to_main_issue: issue_to_main_issue,
         holidays: holidays,
-        full_day_vacation_map: full_day_vacation_map(result_data, timeline_start_date, timeline_end_date),
+        full_day_vacation_map: full_day_vacation_map(timeline_users, timeline_start_date, timeline_end_date),
         result_data: result_data,
+        hidden_teammates_by_group: hidden_teammates_by_group,
         background_issues_by_user: background_issues_by_user,
         total_issue_count: implementation_issues(all_issues).size,
         summarized_issue_count: assigned_issue_list.size
@@ -150,12 +153,24 @@ module RedmineTxMilestone
         result_data[group] = group_users_issues if group_users_issues.any?
       end
 
-      [result_data, users]
+      [result_data, users, registered_user_ids]
     end
 
     def groups_to_show
       excluded_group_ids = Array(TxBaseHelper.config_arr('e_group')).map(&:to_i)
       Group.includes(:users).reject { |group| excluded_group_ids.include?(group.id) }
+    end
+
+    def hidden_teammates_by_group(result_data, registered_user_ids)
+      hidden_registered_user_ids = registered_user_ids.dup
+
+      result_data.each_key.each_with_object({}) do |group, hidden_by_group|
+        hidden_users = group.users
+                            .sort_by(&:name)
+                            .reject { |user| hidden_registered_user_ids.include?(user.id) }
+        hidden_users.each { |user| hidden_registered_user_ids.add(user.id) }
+        hidden_by_group[group] = hidden_users if hidden_users.any?
+      end
     end
 
     def background_issues_for(user_ids, assigned_issue_list, timeline_start_date)
@@ -173,8 +188,8 @@ module RedmineTxMilestone
            .group_by(&:assigned_to_id)
     end
 
-    def full_day_vacation_map(result_data, timeline_start_date, timeline_end_date)
-      displayed_user_logins = result_data.values.flat_map { |users_issues| users_issues.keys.map(&:login) }.to_set
+    def full_day_vacation_map(timeline_users, timeline_start_date, timeline_end_date)
+      displayed_user_logins = timeline_users.map(&:login).to_set
       return {} if displayed_user_logins.empty?
       return {} unless defined?(TxBaseHelper::UserVacationApi) && TxBaseHelper::UserVacationApi.available?
 

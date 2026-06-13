@@ -161,22 +161,16 @@
       font-size: 0.9em;
     }
     .schedule-team-expand-control {
-      margin-top: 6px;
-    }
-    .schedule-team-expand-toggle {
-      border: 1px solid #bbb;
-      border-radius: 3px;
-      background: #f7f7f7;
-      color: #333;
-      cursor: pointer;
-      font-size: 0.85em;
-      line-height: 1.2;
-      padding: 2px 6px;
+      margin-left: 4px;
       white-space: nowrap;
     }
+    .schedule-team-expand-toggle {
+      cursor: pointer;
+      font-size: 0.9em;
+      font-weight: normal;
+    }
     .schedule-team-expand-toggle:hover {
-      background: #fff;
-      border-color: #777;
+      text-decoration: underline;
     }
     .schedule-summary-result {
       --vacation-x-line-half-width: 0.5px;
@@ -1107,22 +1101,22 @@ $(document).ready(function() {
       if (!categoryCell) return;
 
       var isExpanded = !!expandedCategoryIndexes[categoryIndexKey];
-      var control = document.createElement('div');
+      var control = document.createElement('span');
       control.className = 'schedule-team-expand-control';
 
-      var button = document.createElement('button');
-      button.type = 'button';
-      button.className = 'schedule-team-expand-toggle';
-      button.setAttribute('aria-expanded', isExpanded ? 'true' : 'false');
-      button.title = isExpanded ? '비관여 팀원 숨기기' : '이 팀의 비관여 팀원 표시';
-      button.textContent = isExpanded ? '- 비관여 ' + hiddenCount + '명' : '+ 비관여 ' + hiddenCount + '명';
-      button.addEventListener('click', function(event) {
+      var toggleLink = document.createElement('a');
+      toggleLink.href = '#';
+      toggleLink.className = 'schedule-team-expand-toggle';
+      toggleLink.setAttribute('aria-expanded', isExpanded ? 'true' : 'false');
+      toggleLink.title = isExpanded ? '비관여 팀원 숨기기' : '이 팀의 비관여 팀원 표시';
+      toggleLink.textContent = isExpanded ? '(-' + hiddenCount + ')' : '(+' + hiddenCount + ')';
+      toggleLink.addEventListener('click', function(event) {
         event.preventDefault();
         expandedCategoryIndexes[categoryIndexKey] = !expandedCategoryIndexes[categoryIndexKey];
         renderTimeline('auto');
       });
 
-      control.appendChild(button);
+      control.appendChild(toggleLink);
       categoryCell.appendChild(control);
     });
   }
