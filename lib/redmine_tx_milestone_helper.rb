@@ -604,6 +604,18 @@ module RedmineTxMilestoneHelper
     }
   end
 
+  def gantt_delayed_schedule_age_class(issue, today = Date.current)
+    return 'delayed-age-old' unless issue.respond_to?(:end_date_delayed_on)
+    return 'delayed-age-old' unless issue.end_date_delayed_on.present?
+
+    delayed_on = issue.end_date_delayed_on.to_date
+    age_days = [(today.to_date - delayed_on).to_i, 0].max
+
+    age_days <= 5 ? "delayed-age-#{age_days}" : 'delayed-age-old'
+  rescue ArgumentError, TypeError
+    'delayed-age-old'
+  end
+
   def gantt_parent_planning_segments_map(issues, descendant_issues = nil)
     issue_list = Array(issues)
     displayed_issue_ids = issue_list.map(&:id).compact
@@ -837,7 +849,7 @@ module RedmineTxMilestoneHelper
                   :gantt_stale_due_date_range,
                   :gantt_schedule_required?, :gantt_missing_due_date?,
                   :gantt_schedule_line_css_classes, :gantt_schedule_line_edge_css_classes,
-                  :gantt_delayed_schedule_segment,
+                  :gantt_delayed_schedule_segment, :gantt_delayed_schedule_age_class,
                   :gantt_parent_planning_segments_map,
                   :gantt_planning_line_bounds,
                   :gantt_all_descendants_for,

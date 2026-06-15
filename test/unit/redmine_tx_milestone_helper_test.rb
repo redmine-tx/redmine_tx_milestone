@@ -415,6 +415,36 @@ class RedmineTxMilestoneHelperTest < ActiveSupport::TestCase
     assert_nil gantt_delayed_schedule_segment(issue, Date.new(2026, 4, 9), Date.new(2026, 4, 11))
   end
 
+  def test_gantt_delayed_schedule_age_class_distinguishes_recent_delay_days
+    today = Date.new(2026, 4, 15)
+
+    0.upto(5) do |age_days|
+      issue = gantt_issue_stub(
+        id: 510 + age_days,
+        tracker_id: :work,
+        status_id: :open,
+        end_date_delayed_on: today - age_days.days
+      )
+
+      assert_equal "delayed-age-#{age_days}", gantt_delayed_schedule_age_class(issue, today)
+    end
+  end
+
+  def test_gantt_delayed_schedule_age_class_groups_old_or_untracked_delay
+    today = Date.new(2026, 4, 15)
+
+    old_issue = gantt_issue_stub(
+      id: 520,
+      tracker_id: :work,
+      status_id: :open,
+      end_date_delayed_on: today - 6.days
+    )
+    untracked_issue = gantt_issue_stub(id: 521, tracker_id: :work, status_id: :open)
+
+    assert_equal 'delayed-age-old', gantt_delayed_schedule_age_class(old_issue, today)
+    assert_equal 'delayed-age-old', gantt_delayed_schedule_age_class(untracked_issue, today)
+  end
+
   def test_gantt_parent_planning_segments_map_treats_due_only_planning_child_as_single_day_segment
     parent = gantt_issue_stub(id: 100, tracker_id: :work, status_id: :open)
     planning_child = gantt_issue_stub(id: 302, tracker_id: :planning, status_id: :open, parent_id: 100, start_date: nil, due_date: Date.new(2026, 4, 9))
@@ -540,7 +570,7 @@ class RedmineTxMilestoneHelperTest < ActiveSupport::TestCase
 
   private
 
-  def gantt_issue_stub(id:, tracker_id:, status_id:, subject: nil, parent_id: nil, start_date: Date.today, due_date: Date.today, first_due_date: nil, ancestor_id: nil)
+  def gantt_issue_stub(id:, tracker_id:, status_id:, subject: nil, parent_id: nil, start_date: Date.today, due_date: Date.today, first_due_date: nil, end_date_delayed_on: nil, ancestor_id: nil)
     OpenStruct.new(
       id: id,
       subject: subject || "Issue #{id}",
@@ -550,6 +580,7 @@ class RedmineTxMilestoneHelperTest < ActiveSupport::TestCase
       start_date: start_date,
       due_date: due_date,
       first_due_date: first_due_date,
+      end_date_delayed_on: end_date_delayed_on,
       ancestor_id: ancestor_id
     )
   end

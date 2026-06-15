@@ -445,6 +445,7 @@
                 delayed_left = (delayed_schedule_segment[:start_date] - line_start_date).to_i * cell_width
                 delayed_width = (delayed_schedule_segment[:due_date] - delayed_schedule_segment[:start_date] + 1).to_i * cell_width
                 delayed_segment_classes = ['arrow-line-delayed-segment']
+                delayed_segment_classes << gantt_delayed_schedule_age_class(issue)
                 delayed_segment_classes << 'show-after' if delayed_schedule_segment[:due_date] == visible_line_end_date && show_line_after
               %>
               <div class="<%= delayed_segment_classes.join(' ') %>" style="left: <%= line_left + delayed_left %>px; width: <%= delayed_width %>px; top: <%= cell_height -3 %>px;" data-issue-tooltip="<%= issue.id %>"></div>
