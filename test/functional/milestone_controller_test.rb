@@ -54,6 +54,7 @@ class MilestoneControllerTest < Redmine::ControllerTest
     assert_response :success
     assert_select '#issue-summary-fields'
     assert_select '#team-summary-fields'
+    assert_includes response.body, 'tx_milestone_schedule_summary'
   end
 
   def test_update_issue_schedule_updates_dates

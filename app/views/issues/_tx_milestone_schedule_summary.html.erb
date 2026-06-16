@@ -117,6 +117,7 @@
 <% if summary[:result_data].any? %>
   <%= javascript_include_tag 'tx_timeline_grid', plugin: 'redmine_tx_0_base' %>
   <%= stylesheet_link_tag 'tx_timeline_grid', plugin: 'redmine_tx_0_base' %>
+  <%= javascript_include_tag 'tx_milestone_schedule_summary', plugin: 'redmine_tx_milestone' %>
 <% end %>
 
 <style>
@@ -311,265 +312,6 @@ $(function() {
   var verticalMarkers = <%= raw json_escape(summary[:version_markers].to_json) %>;
   var timelineSelector = '#<%= j timeline_container_id %>';
 
-  function parseDate(dateStr) {
-    return new Date(dateStr + 'T00:00:00');
-  }
-
-  function formatDate(date) {
-    var year = date.getFullYear();
-    var month = String(date.getMonth() + 1).padStart(2, '0');
-    var day = String(date.getDate()).padStart(2, '0');
-    return year + '-' + month + '-' + day;
-  }
-
-  function getDuration(schedule) {
-    return Math.floor((parseDate(schedule.endDate) - parseDate(schedule.startDate)) / (1000 * 60 * 60 * 24)) + 1;
-  }
-
-  function cloneSchedule(schedule) {
-    var copy = {};
-    for (var key in schedule) {
-      if (Object.prototype.hasOwnProperty.call(schedule, key)) {
-        copy[key] = schedule[key];
-      }
-    }
-    return copy;
-  }
-
-  function resolveScheduleOverlaps(schedules) {
-    if (!schedules || schedules.length <= 1) return schedules;
-
-    var dayNumberCache = {};
-    var msPerDay = 1000 * 60 * 60 * 24;
-
-    function dayNumber(dateStr) {
-      if (!Object.prototype.hasOwnProperty.call(dayNumberCache, dateStr)) {
-        dayNumberCache[dateStr] = Math.floor(parseDate(dateStr).getTime() / msPerDay);
-      }
-      return dayNumberCache[dateStr];
-    }
-
-    function formatDateFromDayNumber(dayNum) {
-      return formatDate(new Date(dayNum * msPerDay));
-    }
-
-    function durationDays(schedule) {
-      return dayNumber(schedule.endDate) - dayNumber(schedule.startDate) + 1;
-    }
-
-    function addOccupiedRange(ranges, range) {
-      var insertAt = ranges.length;
-      while (insertAt > 0 && ranges[insertAt - 1].start > range.start) {
-        insertAt -= 1;
-      }
-      ranges.splice(insertAt, 0, range);
-    }
-
-    var sorted = schedules.slice().sort(function(a, b) {
-      if (a.isMuted !== b.isMuted) {
-        return a.isMuted ? 1 : -1;
-      }
-
-      var startDiff = dayNumber(a.startDate) - dayNumber(b.startDate);
-      return startDiff !== 0 ? startDiff : durationDays(b) - durationDays(a);
-    });
-
-    var result = [];
-    var mainOccupiedRanges = [];
-    var allOccupiedRanges = [];
-
-    sorted.forEach(function(schedule) {
-      var schedStart = dayNumber(schedule.startDate);
-      var schedEnd = dayNumber(schedule.endDate);
-
-      if (schedule.isMuted) {
-        var periodsToProcess = [{ start: schedStart, end: schedEnd }];
-
-        allOccupiedRanges.forEach(function(occupied) {
-          var nextPeriods = [];
-
-          periodsToProcess.forEach(function(period) {
-            if (period.start <= occupied.end && period.end >= occupied.start) {
-              if (period.start < occupied.start) {
-                var beforeEnd = occupied.start - 1;
-                if (beforeEnd >= period.start) {
-                  nextPeriods.push({ start: period.start, end: beforeEnd });
-                }
-              }
-
-              if (period.end > occupied.end) {
-                var afterStart = occupied.end + 1;
-                if (afterStart <= period.end) {
-                  nextPeriods.push({ start: afterStart, end: period.end });
-                }
-              }
-            } else {
-              nextPeriods.push(period);
-            }
-          });
-
-          periodsToProcess = nextPeriods;
-        });
-
-        periodsToProcess.forEach(function(period) {
-          var adjustedSchedule = cloneSchedule(schedule);
-          adjustedSchedule.startDate = formatDateFromDayNumber(period.start);
-          adjustedSchedule.endDate = formatDateFromDayNumber(period.end);
-
-          if (schedule.startDate !== adjustedSchedule.startDate || schedule.endDate !== adjustedSchedule.endDate) {
-            adjustedSchedule.originalStartDate = schedule.startDate;
-            adjustedSchedule.originalEndDate = schedule.endDate;
-          }
-
-          result.push(adjustedSchedule);
-          addOccupiedRange(allOccupiedRanges, { start: period.start, end: period.end });
-        });
-      } else {
-        var adjustedStart = schedStart;
-        var adjustedEnd = schedEnd;
-
-        mainOccupiedRanges.forEach(function(occupied) {
-          if (adjustedStart <= occupied.end && adjustedEnd >= occupied.start) {
-            var nextDay = occupied.end + 1;
-            if (nextDay > adjustedStart) {
-              adjustedStart = nextDay;
-            }
-          }
-        });
-
-        if (adjustedStart > adjustedEnd) return;
-
-        var adjustedMainSchedule = cloneSchedule(schedule);
-        adjustedMainSchedule.startDate = formatDateFromDayNumber(adjustedStart);
-        adjustedMainSchedule.endDate = formatDateFromDayNumber(adjustedEnd);
-
-        if (schedule.startDate !== adjustedMainSchedule.startDate) {
-          adjustedMainSchedule.originalStartDate = schedule.startDate;
-        }
-
-        result.push(adjustedMainSchedule);
-        var rangeEntry = { start: adjustedStart, end: adjustedEnd };
-        addOccupiedRange(allOccupiedRanges, rangeEntry);
-        addOccupiedRange(mainOccupiedRanges, rangeEntry);
-      }
-    });
-
-    return result.sort(function(a, b) {
-      return dayNumber(a.startDate) - dayNumber(b.startDate);
-    });
-  }
-
-  function decorateFullDayVacationCells(containerSelector, data, vacationMap) {
-    if (!vacationMap || Object.keys(vacationMap).length === 0) return;
-
-    var container = document.querySelector(containerSelector);
-    if (!container) return;
-
-    var table = container.querySelector('.tx-timeline-table');
-    if (!table) return;
-
-    Array.prototype.forEach.call(table.querySelectorAll('td.tx-full-day-vacation-cell'), function(cell) {
-      cell.classList.remove('tx-full-day-vacation-cell');
-      Array.prototype.forEach.call(cell.querySelectorAll('.tx-full-day-vacation-segment'), function(segment) {
-        if (segment.parentNode) segment.parentNode.removeChild(segment);
-      });
-    });
-
-    var dayCells = Array.prototype.slice.call(table.querySelectorAll('thead .tx-day-row .tx-day-cell[data-day-index]'));
-    var rowEls = Array.prototype.slice.call(table.querySelectorAll('tbody tr.tx-data-row'));
-    if (!dayCells.length || !rowEls.length) return;
-
-    var dayCellWidth = dayCells[0].getBoundingClientRect().width;
-    var startDate = parseDate(data.options.startDate);
-    var dayOfWeek = startDate.getDay();
-    var daysToSubtract = dayOfWeek === 0 ? 6 : dayOfWeek - 1;
-    if (daysToSubtract > 0) {
-      startDate.setDate(startDate.getDate() - daysToSubtract);
-    }
-
-    var dayMeta = {};
-    dayCells.forEach(function(dayCell) {
-      var dayIndex = parseInt(dayCell.getAttribute('data-day-index'), 10);
-      if (isNaN(dayIndex)) return;
-
-      var markerDate = new Date(startDate);
-      markerDate.setDate(startDate.getDate() + dayIndex);
-      dayMeta[dayIndex] = { date: formatDate(markerDate) };
-    });
-
-    var rowIndex = 0;
-    data.categories.forEach(function(category) {
-      (category.events || []).forEach(function(event) {
-        var rowEl = rowEls[rowIndex];
-        rowIndex += 1;
-        if (!rowEl || !event.login) return;
-
-        var cellEntries = [];
-        var dayCursor = 0;
-        Array.prototype.forEach.call(rowEl.querySelectorAll('td.tx-schedule-cell'), function(cell) {
-          var colspan = parseInt(cell.getAttribute('colspan') || '1', 10);
-          var safeColspan = isNaN(colspan) || colspan < 1 ? 1 : colspan;
-
-          cellEntries.push({
-            cell: cell,
-            startIndex: dayCursor,
-            colspan: safeColspan
-          });
-          dayCursor += safeColspan;
-        });
-
-        Object.keys(dayMeta).forEach(function(dayIndexKey) {
-          var dayIndex = parseInt(dayIndexKey, 10);
-          var meta = dayMeta[dayIndexKey];
-          if (!meta || !vacationMap[meta.date] || !vacationMap[meta.date][event.login]) return;
-
-          var cellEntry = cellEntries.find(function(entry) {
-            return dayIndex >= entry.startIndex && dayIndex < entry.startIndex + entry.colspan;
-          });
-          if (!cellEntry) return;
-
-          var cell = cellEntry.cell;
-          cell.classList.add('tx-full-day-vacation-cell');
-          if (!cell.classList.contains('tx-schedule-bar')) return;
-
-          var segment = document.createElement('span');
-          segment.className = 'tx-full-day-vacation-segment';
-          segment.setAttribute('aria-hidden', 'true');
-          segment.style.left = ((dayIndex - cellEntry.startIndex) * dayCellWidth) + 'px';
-          segment.style.width = dayCellWidth + 'px';
-          cell.appendChild(segment);
-        });
-      });
-    });
-  }
-
-  function cloneTimelineData(data) {
-    return JSON.parse(JSON.stringify(data));
-  }
-
-  function buildTimelineData(expandedIndexes) {
-    var data = cloneTimelineData(jsonDataBase);
-    expandedIndexes = expandedIndexes || {};
-
-    Object.keys(expandedIndexes).forEach(function(categoryIndexKey) {
-      if (!expandedIndexes[categoryIndexKey]) return;
-
-      var categoryIndex = parseInt(categoryIndexKey, 10);
-      if (isNaN(categoryIndex) || !data.categories[categoryIndex]) return;
-
-      var hiddenEvents = cloneTimelineData(hiddenTeammateEventsByCategoryIndex[categoryIndexKey] || []);
-      data.categories[categoryIndex].events = data.categories[categoryIndex].events.concat(hiddenEvents);
-    });
-
-    data.categories.forEach(function(category) {
-      category.events.forEach(function(event) {
-        event.schedules = resolveScheduleOverlaps(event.schedules);
-      });
-    });
-
-    return data;
-  }
-
   function injectTeamExpandControls() {
     var container = document.querySelector(timelineSelector);
     if (!container) return;
@@ -606,14 +348,14 @@ $(function() {
   }
 
   function renderTimeline(scrollBehavior) {
-    currentJsonData = buildTimelineData(expandedCategoryIndexes);
+    currentJsonData = TxMilestoneScheduleSummary.buildTimelineData(jsonDataBase, hiddenTeammateEventsByCategoryIndex, expandedCategoryIndexes);
     TxTimelineGrid.render(timelineSelector, currentJsonData, {
       verticalMarkers: verticalMarkers,
       scrollToToday: true,
       scrollAlign: 'center',
       scrollBehavior: scrollBehavior || 'auto'
     });
-    decorateFullDayVacationCells(timelineSelector, currentJsonData, fullDayVacationMap);
+    TxMilestoneScheduleSummary.decorateFullDayVacationCells(timelineSelector, currentJsonData, fullDayVacationMap);
     injectTeamExpandControls();
   }
 
@@ -630,7 +372,7 @@ $(function() {
 
   $(window).off('resize.<%= j resize_namespace %>').on('resize.<%= j resize_namespace %>', function() {
     if (currentJsonData) {
-      decorateFullDayVacationCells(timelineSelector, currentJsonData, fullDayVacationMap);
+      TxMilestoneScheduleSummary.decorateFullDayVacationCells(timelineSelector, currentJsonData, fullDayVacationMap);
     }
   });
   <% end %>

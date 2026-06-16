@@ -131,6 +131,7 @@ module RedmineTxMilestone
 
     def grouped_user_issues(assigned_issue_list)
       issues_by_user = assigned_issue_list.group_by(&:assigned_to_id)
+                                        .transform_values { |issues| issues.sort_by(&:start_date) }
       users = User.where(id: issues_by_user.keys.compact).index_by(&:id)
       registered_user_ids = Set.new
       result_data = {}
@@ -146,7 +147,7 @@ module RedmineTxMilestone
           user = users[user_id]
           next unless user
 
-          user_issues = issues_by_user[user_id].sort_by(&:start_date)
+          user_issues = issues_by_user[user_id]
           next if user_issues.blank?
 
           group_users_issues[user] = user_issues
