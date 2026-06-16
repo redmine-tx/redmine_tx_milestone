@@ -1,4 +1,5 @@
 require 'set'
+require 'digest'
 
 class MilestoneController < ApplicationController
   include SortHelper
@@ -460,7 +461,7 @@ class MilestoneController < ApplicationController
           if schedule_summary_mode == 'issue' && params[:issue_ids].blank?
             return render json: { success: false, error: '일감 ID가 필요합니다.' }
           end
-          data = compute_schedule_summary_data
+          data = cached_schedule_summary_data
           prompt = build_schedule_summary_ai_prompt(data)
         else
           return render json: { success: false, error: "알 수 없는 요약 유형: #{params[:type]}" }
@@ -468,7 +469,11 @@ class MilestoneController < ApplicationController
 
         return render json: { success: false, error: '프롬프트를 생성할 수 없습니다.' } unless prompt
 
-        result = RedmineTxMcp::LlmService.summarize(prompt)
+        result = if params[:type] == 'schedule_summary'
+                   cached_schedule_summary_ai_result(prompt)
+                 else
+                   RedmineTxMcp::LlmService.summarize(prompt)
+                 end
 
         if result.present?
           render json: { success: true, summary: result }
@@ -480,6 +485,61 @@ class MilestoneController < ApplicationController
         render json: { success: false, error: '요약 생성 중 오류가 발생했습니다.' }
       end
     end
+
+    def cached_schedule_summary_data
+      return compute_schedule_summary_data if params[:force] == 'true'
+
+      Rails.cache.fetch(schedule_summary_data_cache_key, expires_in: 5.minutes, skip_nil: true) do
+        compute_schedule_summary_data
+      end
+    end
+
+    def schedule_summary_data_cache_key
+      mode = schedule_summary_mode
+      display_start_date = begin
+        params[:display_start_date].present? ? Date.parse(params[:display_start_date]) : 2.months.ago.to_date
+      rescue ArgumentError
+        2.months.ago.to_date
+      end
+
+      scope_key = if mode == 'team'
+                    schedule_summary_group_ids.join(',')
+                  else
+                    params[:issue_ids].to_s.split(/[,;\s]+/).map(&:strip).reject(&:blank?).map(&:to_i).uniq.sort.join(',')
+                  end
+      digest_source = "#{@project.id}:#{User.current.id}:#{Date.today}:#{mode}:#{display_start_date}:#{scope_key}"
+      digest = Digest::SHA256.hexdigest(digest_source)[0..15]
+
+      "milestone/schedule_summary_data/#{@project.id}/#{User.current.id}/#{digest}"
+    end
+
+    def cached_schedule_summary_ai_result(prompt)
+      return RedmineTxMcp::LlmService.summarize(prompt) if params[:force] == 'true'
+
+      Rails.cache.fetch(schedule_summary_ai_cache_key(prompt), expires_in: 30.minutes, skip_nil: true) do
+        result = RedmineTxMcp::LlmService.summarize(prompt)
+        result.present? ? result : nil
+      end
+    end
+
+    def schedule_summary_ai_cache_key(prompt)
+      mcp_settings = Setting.plugin_redmine_tx_mcp rescue {}
+      llm_provider = mcp_settings['llm_provider'] || 'anthropic'
+      llm_model = if llm_provider == 'openai'
+                    mcp_settings['openai_model'].presence || 'default'
+                  else
+                    mcp_settings['claude_model'].presence || 'claude-sonnet-4-6'
+                  end
+      digest_source = "#{@project.id}:#{User.current.id}:#{llm_provider}:#{llm_model}:#{prompt}"
+      prompt_digest = Digest::SHA256.hexdigest(digest_source)[0..15]
+
+      "milestone/schedule_summary_ai/#{@project.id}/#{User.current.id}/#{prompt_digest}"
+    end
+
+    private :cached_schedule_summary_data,
+            :schedule_summary_data_cache_key,
+            :cached_schedule_summary_ai_result,
+            :schedule_summary_ai_cache_key
 
     def sync_parent_date
     end
@@ -1157,6 +1217,7 @@ class MilestoneController < ApplicationController
 
       groups_to_show = schedule_summary_groups_to_show
       selected_user_ids = groups_to_show.flat_map { |group| group.users.map(&:id) }.uniq
+      issue_preload_associations = RedmineTxMilestoneHelper.schedule_summary_issue_preload_associations
 
       if mode == 'team'
         input_issue_ids = []
@@ -1166,7 +1227,10 @@ class MilestoneController < ApplicationController
         # 일감 ID 파싱 → 부모 일감 → 하위 일감 (ERB 로직 재현)
         input_issue_ids = params[:issue_ids].to_s.split(/[,;\s]+/).map(&:strip).reject(&:empty?).map(&:to_i).uniq
         input_issues = Issue.visible.where(id: input_issue_ids).to_a
-        parent_issues = Issue.visible.where(id: input_issues.map(&:root_id).uniq).to_a
+        parent_issues = Issue.visible
+                             .where(id: input_issues.map(&:root_id).uniq)
+                             .preload(*issue_preload_associations)
+                             .to_a
 
         all_issue_ids = Set.new(input_issues.map(&:id))
         # parent_issues는 루트이므로 하위 트리 전체가 같은 root_id를 가짐
@@ -1186,16 +1250,20 @@ class MilestoneController < ApplicationController
                                .where.not(status_id: IssueStatus.discarded_ids)
       filtered = filtered_all.where.not(start_date: nil).where.not(due_date: nil)
                              .where('start_date >= ? OR due_date >= ?', display_start_date, display_start_date)
+      filtered_issue_list = filtered.preload(*issue_preload_associations).to_a
 
       if mode == 'team'
-        parent_issues = Issue.visible.where(id: filtered.distinct.pluck(:root_id)).to_a
+        parent_issues = Issue.visible
+                             .where(id: filtered_issue_list.map(&:root_id).uniq)
+                             .preload(*issue_preload_associations)
+                             .to_a
       end
 
       # 1. parent_issues
       pi_data = parent_issues.map { |i| { id: i.id, subject: i.subject } }
 
       # 2. holidays
-      max_due = filtered.maximum(:due_date) || today
+      max_due = filtered_issue_list.filter_map(&:due_date).max || today
       timeline_end = max_due + 60.days
       holiday_list = []
       if TxBaseHelper::HolidayApi.available?
@@ -1205,7 +1273,7 @@ class MilestoneController < ApplicationController
       holidays_data = { count: holiday_list.size, list: holiday_list }
 
       # 사용자별 그룹핑
-      issues_by_user = filtered.where.not(assigned_to_id: nil).group_by(&:assigned_to_id)
+      issues_by_user = filtered_issue_list.select(&:assigned_to_id).group_by(&:assigned_to_id)
       user_ids = issues_by_user.keys.compact
       users = User.where(id: user_ids).index_by(&:id)
 
@@ -1261,18 +1329,29 @@ class MilestoneController < ApplicationController
 
       # 6. issues_with_tips — tip이 있는 일감만
       issues_with_tips = []
-      if filtered_all.first&.respond_to?(:tip)
-        filtered_all.each do |issue|
+      filtered_all_list = nil
+      if Issue.method_defined?(:tip)
+        filtered_all_list = filtered_all.preload(*issue_preload_associations).to_a
+        filtered_all_list.each do |issue|
           t = issue.tip
           next unless t.present?
+
           assignee = issue.assigned_to&.name || '미배정'
           issues_with_tips << { id: issue.id, subject: issue.subject.truncate(40), tip: t, assignee: assignee }
         end
       end
 
       # 7. missing_schedule — 일정 미기입 일감
-      missing_schedule_issues = filtered_all.where.not(assigned_to_id: nil)
-                                            .where('start_date IS NULL OR due_date IS NULL')
+      missing_schedule_issues = if filtered_all_list
+                                  filtered_all_list.select do |issue|
+                                    issue.assigned_to_id.present? && (issue.start_date.nil? || issue.due_date.nil?)
+                                  end
+                                else
+                                  filtered_all.where.not(assigned_to_id: nil)
+                                              .where('start_date IS NULL OR due_date IS NULL')
+                                              .preload(*issue_preload_associations)
+                                              .to_a
+                                end
       missing_list = missing_schedule_issues.map do |i|
         { id: i.id, subject: i.subject.truncate(40), assignee: i.assigned_to&.name || '미배정' }
       end
@@ -1289,8 +1368,8 @@ class MilestoneController < ApplicationController
         version_marks: version_marks,
         issues_with_tips: issues_with_tips,
         missing_schedule: missing_schedule,
-        total_filtered: filtered_all.size,
-        total_with_schedule: filtered.where.not(assigned_to_id: nil).size
+        total_filtered: filtered_all_list ? filtered_all_list.size : filtered_all.count,
+        total_with_schedule: filtered_issue_list.count(&:assigned_to_id)
       }
     end
 

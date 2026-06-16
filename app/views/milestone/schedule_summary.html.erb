@@ -286,6 +286,8 @@ end
     all_issues = Issue.visible.where(id: all_issue_ids.to_a)
   end
 
+  issue_preload_associations = RedmineTxMilestoneHelper.schedule_summary_issue_preload_associations
+
   # 메인 일감별 색상 팔레트 정의
   color_palette = [
     '#98E5B0', '#FFD280', '#C897CE', '#8FC5F0', '#FFB0B0', 
@@ -317,11 +319,15 @@ end
   filtered_issues = filtered_issues.where.not(tracker_id: excluded_tracker_ids)
 
   # 동일 relation의 반복 실행(each/maximum/pluck마다 쿼리)을 막기 위해 한 번만 로드
-  filtered_issue_list = filtered_issues.to_a
+  filtered_issue_list = filtered_issues.preload(*issue_preload_associations).to_a
+  assigned_filtered_issue_count = filtered_issue_list.count(&:assigned_to_id)
 
   if summary_mode == 'team'
     # 일감마다 issue.root(쿼리)를 부르지 않고 root_id로 일괄 조회
-    parent_issues = Issue.visible.where(id: filtered_issue_list.map(&:root_id).uniq).sort_by(&:id)
+    parent_issues = Issue.visible
+                         .where(id: filtered_issue_list.map(&:root_id).uniq)
+                         .preload(*issue_preload_associations)
+                         .sort_by(&:id)
   else
     parent_issues = parent_issues.uniq { |issue| issue.id }
   end
@@ -381,13 +387,17 @@ end
   # 전체 일감에도 동일한 tracker 필터 적용 (배제된 일감 계산에 사용)
   filtered_all_issues = all_issues.where.not(tracker_id: excluded_tracker_ids)
                                   .where.not(status_id: IssueStatus.discarded_ids)
+  filtered_all_issue_count = filtered_all_issues.count
   
   # 사용자별 일감 그룹핑 (담당자가 있고 일정이 있는 것만)
-  issues_by_user = filtered_issue_list.select(&:assigned_to_id).group_by(&:assigned_to_id)
+  issues_by_user = filtered_issue_list.select(&:assigned_to_id)
+                                      .group_by(&:assigned_to_id)
+                                      .transform_values { |issues| issues.sort_by(&:start_date) }
 
   # 사용자 정보 미리 로드
   user_ids = issues_by_user.keys.compact
   users = User.where(id: user_ids).index_by(&:id)
+  in_progress_status_ids = IssueStatus.new_ids + IssueStatus.in_progress_ids + IssueStatus.in_review_ids
   
   # 결과 데이터 구성: 그룹 -> 사용자 -> 일감들
   result_data = {}
@@ -403,7 +413,7 @@ end
       user = users[user_id]
       next unless user
       
-      user_issues = issues_by_user[user_id].sort_by(&:start_date)
+      user_issues = issues_by_user[user_id]
       if user_issues.any?
         group_users_issues[user] = user_issues
         registered_user_ids.add(user_id)  # 등록된 사용자 ID 기록
@@ -465,7 +475,9 @@ end
          .where.not(due_date: nil)
          .where.not(tracker_id: excluded_tracker_ids)
          .where("start_date >= ? OR due_date >= ?", display_start_date, display_start_date)
+         .preload(*issue_preload_associations)
          .group_by(&:assigned_to_id)
+         .transform_values { |issues| issues.sort_by(&:start_date) }
   else
     {}
   end
@@ -473,11 +485,17 @@ end
   # 배제된 일감들 분류
   # 1. 미배정 일감 (담당자 없음)
   unassigned_issues = filtered_all_issues.where(assigned_to_id: nil)
+                                         .preload(*issue_preload_associations)
+                                         .to_a
   
   # 2. 일정 미기입 일감 (담당자는 있지만 시작일 또는 완료일 없음, 구현끝 제외)
   missing_schedule_issues = filtered_all_issues.where.not(assigned_to_id: nil)
                                                .where('start_date IS NULL OR due_date IS NULL')
                                                .where.not(status_id: IssueStatus.implemented_ids)
+                                               .preload(*issue_preload_associations)
+                                               .to_a
+  unassigned_issue_count = unassigned_issues.size
+  missing_schedule_issue_count = missing_schedule_issues.size
   %>
   
   <% if Setting.plugin_redmine_tx_milestone['enable_ai_summary_schedule'] == 'true' %>
@@ -490,16 +508,16 @@ end
   <% end %>
 
   <%
-    excluded_count = unassigned_issues.size + missing_schedule_issues.size
-    excluded_pct = filtered_all_issues.size > 0 ? (excluded_count * 100.0 / filtered_all_issues.size).round(0) : 0
+    excluded_count = unassigned_issue_count + missing_schedule_issue_count
+    excluded_pct = filtered_all_issue_count > 0 ? (excluded_count * 100.0 / filtered_all_issue_count).round(0) : 0
   %>
   <% if excluded_count > 0 %>
     <div class="schedule-excluded-warning">
       <strong>⚠ 산정 제외 일감 <%= excluded_count %>건 (<%= excluded_pct %>%)</strong>
-      — 전체 <%= filtered_all_issues.size %>건 중
+      — 전체 <%= filtered_all_issue_count %>건 중
       <% parts = [] %>
-      <% parts << "<a href=\"#unassigned-issues-list\">미배정 #{unassigned_issues.size}건</a>" if unassigned_issues.any? %>
-      <% parts << "<a href=\"#missing-schedule-issues-list\">일정 미기입 #{missing_schedule_issues.size}건</a>" if missing_schedule_issues.any? %>
+      <% parts << "<a href=\"#unassigned-issues-list\">미배정 #{unassigned_issue_count}건</a>" if unassigned_issue_count.positive? %>
+      <% parts << "<a href=\"#missing-schedule-issues-list\">일정 미기입 #{missing_schedule_issue_count}건</a>" if missing_schedule_issue_count.positive? %>
       <%= raw parts.join(', ') %>이 일정 요약에서 빠져 있습니다.
       <% if excluded_pct >= 30 %>
         <br><strong>일정 산정의 신뢰도가 낮습니다. 일정 배정을 먼저 진행해 주세요.</strong>
@@ -525,7 +543,7 @@ end
       <h3 style="color: #ddd;">📝 산정에서 배제된 일감</h3>
       
       <% if unassigned_issues.any? %>
-        <h4 style="margin: 15px 0 10px 0; color: #666;">미배정 일감 (<%= unassigned_issues.size %>개)</h4>
+        <h4 style="margin: 15px 0 10px 0; color: #666;">미배정 일감 (<%= unassigned_issue_count %>개)</h4>
         <%= render partial: 'shared/issue_list', locals: { 
           issues: unassigned_issues, 
           page_size: 15, 
@@ -535,7 +553,7 @@ end
       <% end %>
       
       <% if missing_schedule_issues.any? %>
-        <h4 style="margin: 15px 0 10px 0; color: #666;">일정 미기입 일감 (<%= missing_schedule_issues.size %>개)</h4>
+        <h4 style="margin: 15px 0 10px 0; color: #666;">일정 미기입 일감 (<%= missing_schedule_issue_count %>개)</h4>
         <%= render partial: 'shared/issue_list', locals: { 
           issues: missing_schedule_issues, 
           page_size: 15, 
@@ -557,7 +575,7 @@ end
                 <span class="user-name">- <%= link_to user.name, user_path(user) %> :</span>
 
                 <%# 기본 일감 표시 %>
-                <% issues.sort_by(&:start_date).each_with_index do |issue, idx| %>
+                <% issues.each_with_index do |issue, idx| %>
                   <%
                     main_issue_id = issue_to_main_issue[issue.id]
                     issue_color = main_issue_colors[main_issue_id] || '#999999'
@@ -572,7 +590,7 @@ end
                   <br>
                   <span style="margin-left: 20px; color: #999;">
                     (기타 일정:
-                    <% background_issues_by_user[user.id].sort_by(&:start_date).each_with_index do |bg_issue, idx| %>
+                    <% background_issues_by_user[user.id].each_with_index do |bg_issue, idx| %>
                       <span class="issue-link" style="opacity: 0.7;">
                         <span class="issue-color-indicator" style="background-color: #e0e0e0;"></span><%= link_to "##{bg_issue.id}", issue_path(bg_issue), data: { issue_tooltip: bg_issue.id }, style: "color: #999;" %><span class="issue-dates">(<%= bg_issue.start_date.strftime('%Y-%m-%d') %>~<%= bg_issue.due_date.strftime('%Y-%m-%d') %>)</span><%= ',' unless idx == background_issues_by_user[user.id].size - 1 %>
                       </span>
@@ -591,12 +609,12 @@ end
       <% if summary_mode == 'team' %>
         선택된 팀: <strong><%= selected_group_ids.any? ? groups_to_show.size : all_groups.size %>개</strong> |
         구성원: <strong><%= selected_team_user_ids.size %>명</strong> |
-        전체 일감 (실제 구현 일감만): <strong><%= filtered_all_issues.size %>개</strong> |
-        요약된 일감 (일정 있음): <strong><%= filtered_issue_list.count(&:assigned_to_id) %>개</strong>
+        전체 일감 (실제 구현 일감만): <strong><%= filtered_all_issue_count %>개</strong> |
+        요약된 일감 (일정 있음): <strong><%= assigned_filtered_issue_count %>개</strong>
       <% else %>
         입력된 일감: <strong><%= input_issue_ids.size %>개</strong> |
-        전체 일감 (하위 포함, 실제 구현 일감만): <strong><%= filtered_all_issues.size %>개</strong> |
-        요약된 일감 (담당자/일정 있음): <strong><%= filtered_issue_list.count(&:assigned_to_id) %>개</strong>
+        전체 일감 (하위 포함, 실제 구현 일감만): <strong><%= filtered_all_issue_count %>개</strong> |
+        요약된 일감 (담당자/일정 있음): <strong><%= assigned_filtered_issue_count %>개</strong>
       <% end %>
     </p>
   </div>
@@ -615,13 +633,22 @@ $(document).ready(function() {
   function resolveScheduleOverlaps(schedules) {
     if (!schedules || schedules.length <= 1) return schedules;
     
-    // 날짜 문자열을 Date 객체로 변환하는 헬퍼
-    function parseDate(dateStr) {
-      return new Date(dateStr + 'T00:00:00');
-    }
+    var dayNumberCache = {};
+    var msPerDay = 1000 * 60 * 60 * 24;
     
-    // Date를 날짜 문자열로 변환하는 헬퍼
-    function formatDate(date) {
+    function dayNumber(dateStr) {
+      if (!Object.prototype.hasOwnProperty.call(dayNumberCache, dateStr)) {
+        dayNumberCache[dateStr] = Math.floor(new Date(dateStr + 'T00:00:00').getTime() / msPerDay);
+      }
+      return dayNumberCache[dateStr];
+    }
+
+    function dateFromDayNumber(dayNum) {
+      return new Date(dayNum * msPerDay);
+    }
+
+    function formatDateFromDayNumber(dayNum) {
+      var date = dateFromDayNumber(dayNum);
       var year = date.getFullYear();
       var month = String(date.getMonth() + 1).padStart(2, '0');
       var day = String(date.getDate()).padStart(2, '0');
@@ -630,9 +657,7 @@ $(document).ready(function() {
     
     // 일정 기간(일수) 계산
     function getDuration(schedule) {
-      var start = parseDate(schedule.startDate);
-      var end = parseDate(schedule.endDate);
-      return Math.floor((end - start) / (1000 * 60 * 60 * 24)) + 1;
+      return dayNumber(schedule.endDate) - dayNumber(schedule.startDate) + 1;
     }
     
     // 정렬: 1. isMuted=false 우선, 2. 시작일 빠른 순, 3. 기간 긴 순
@@ -642,9 +667,9 @@ $(document).ready(function() {
         return a.isMuted ? 1 : -1;
       }
       // 시작일 비교
-      var startA = parseDate(a.startDate);
-      var startB = parseDate(b.startDate);
-      if (startA.getTime() !== startB.getTime()) {
+      var startA = dayNumber(a.startDate);
+      var startB = dayNumber(b.startDate);
+      if (startA !== startB) {
         return startA - startB;
       }
       // 기간이 긴 것 우선
@@ -655,6 +680,14 @@ $(document).ready(function() {
     var mainOccupiedRanges = []; // 기본 일감(isMuted=false)만의 점유 범위
     var allOccupiedRanges = [];  // 전체 일감의 점유 범위 (기본 + 미완료)
     
+    function addOccupiedRange(ranges, range) {
+      var insertAt = ranges.length;
+      while (insertAt > 0 && ranges[insertAt - 1].start > range.start) {
+        insertAt -= 1;
+      }
+      ranges.splice(insertAt, 0, range);
+    }
+
     // 스케줄 복사 헬퍼
     function cloneSchedule(schedule) {
       var copy = {};
@@ -667,8 +700,8 @@ $(document).ready(function() {
     }
     
     sorted.forEach(function(schedule) {
-      var schedStart = parseDate(schedule.startDate);
-      var schedEnd = parseDate(schedule.endDate);
+      var schedStart = dayNumber(schedule.startDate);
+      var schedEnd = dayNumber(schedule.endDate);
       var isMuted = schedule.isMuted;
       
       // 참조할 점유 범위 선택:
@@ -676,23 +709,18 @@ $(document).ready(function() {
       // - 미완료 일감(isMuted=true): 전체 점유 범위 참조
       var referenceRanges = isMuted ? allOccupiedRanges : mainOccupiedRanges;
       
-      // 점유 범위를 시작일 순으로 정렬
-      var sortedOccupied = referenceRanges.slice().sort(function(a, b) {
-        return a.start - b.start;
-      });
-      
       if (isMuted) {
         // ========================================
         // 미완료 일감: 분할 로직
         // 기본 일감에 의해 중간이 잘리면 앞/뒤로 분할
         // ========================================
         var periodsToProcess = [{
-          start: new Date(schedStart),
-          end: new Date(schedEnd)
+          start: schedStart,
+          end: schedEnd
         }];
         
         // 각 점유 범위에 대해 기간 분할
-        sortedOccupied.forEach(function(occupied) {
+        referenceRanges.forEach(function(occupied) {
           var newPeriods = [];
           
           periodsToProcess.forEach(function(period) {
@@ -702,11 +730,10 @@ $(document).ready(function() {
               
               // 점유 범위 "전" 부분 (period.start ~ occupied.start - 1일)
               if (period.start < occupied.start) {
-                var beforeEnd = new Date(occupied.start);
-                beforeEnd.setDate(beforeEnd.getDate() - 1);
+                var beforeEnd = occupied.start - 1;
                 if (beforeEnd >= period.start) {
                   newPeriods.push({ 
-                    start: new Date(period.start), 
+                    start: period.start,
                     end: beforeEnd 
                   });
                 }
@@ -714,12 +741,11 @@ $(document).ready(function() {
               
               // 점유 범위 "후" 부분 (occupied.end + 1일 ~ period.end)
               if (period.end > occupied.end) {
-                var afterStart = new Date(occupied.end);
-                afterStart.setDate(afterStart.getDate() + 1);
+                var afterStart = occupied.end + 1;
                 if (afterStart <= period.end) {
                   newPeriods.push({ 
                     start: afterStart, 
-                    end: new Date(period.end) 
+                    end: period.end
                   });
                 }
               }
@@ -735,22 +761,22 @@ $(document).ready(function() {
         // 분할된 기간들을 결과에 추가
         periodsToProcess.forEach(function(period) {
           var adjustedSchedule = cloneSchedule(schedule);
-          adjustedSchedule.startDate = formatDate(period.start);
-          adjustedSchedule.endDate = formatDate(period.end);
+          adjustedSchedule.startDate = formatDateFromDayNumber(period.start);
+          adjustedSchedule.endDate = formatDateFromDayNumber(period.end);
           
           // 원본과 다르면 표시
-          if (formatDate(schedStart) !== adjustedSchedule.startDate || 
-              formatDate(schedEnd) !== adjustedSchedule.endDate) {
-            adjustedSchedule.originalStartDate = formatDate(schedStart);
-            adjustedSchedule.originalEndDate = formatDate(schedEnd);
+          if (schedule.startDate !== adjustedSchedule.startDate ||
+              schedule.endDate !== adjustedSchedule.endDate) {
+            adjustedSchedule.originalStartDate = schedule.startDate;
+            adjustedSchedule.originalEndDate = schedule.endDate;
           }
           
           result.push(adjustedSchedule);
           
           // 점유 범위에 추가 (미완료 일감은 allOccupiedRanges에만)
-          allOccupiedRanges.push({ 
-            start: new Date(period.start), 
-            end: new Date(period.end) 
+          addOccupiedRange(allOccupiedRanges, {
+            start: period.start,
+            end: period.end
           });
         });
         
@@ -758,16 +784,15 @@ $(document).ready(function() {
         // ========================================
         // 기본 일감: 기존 로직 (시작일 조정)
         // ========================================
-        var adjustedStart = new Date(schedStart);
-        var adjustedEnd = new Date(schedEnd);
+        var adjustedStart = schedStart;
+        var adjustedEnd = schedEnd;
         
-        for (var i = 0; i < sortedOccupied.length; i++) {
-          var occupied = sortedOccupied[i];
+        for (var i = 0; i < referenceRanges.length; i++) {
+          var occupied = referenceRanges[i];
           
           // 겹침 확인
           if (adjustedStart <= occupied.end && adjustedEnd >= occupied.start) {
-            var nextDay = new Date(occupied.end);
-            nextDay.setDate(nextDay.getDate() + 1);
+            var nextDay = occupied.end + 1;
             
             if (nextDay > adjustedStart) {
               adjustedStart = nextDay;
@@ -785,25 +810,25 @@ $(document).ready(function() {
         }
         
         var adjustedSchedule = cloneSchedule(schedule);
-        adjustedSchedule.startDate = formatDate(adjustedStart);
-        adjustedSchedule.endDate = formatDate(adjustedEnd);
+        adjustedSchedule.startDate = formatDateFromDayNumber(adjustedStart);
+        adjustedSchedule.endDate = formatDateFromDayNumber(adjustedEnd);
         
-        if (formatDate(schedStart) !== adjustedSchedule.startDate) {
-          adjustedSchedule.originalStartDate = formatDate(schedStart);
+        if (schedule.startDate !== adjustedSchedule.startDate) {
+          adjustedSchedule.originalStartDate = schedule.startDate;
         }
         
         result.push(adjustedSchedule);
         
         // 점유 범위에 추가 (기본 일감은 양쪽 모두)
-        var rangeEntry = { start: new Date(adjustedStart), end: new Date(adjustedEnd) };
-        allOccupiedRanges.push(rangeEntry);
-        mainOccupiedRanges.push({ start: new Date(adjustedStart), end: new Date(adjustedEnd) });
+        var rangeEntry = { start: adjustedStart, end: adjustedEnd };
+        addOccupiedRange(allOccupiedRanges, rangeEntry);
+        addOccupiedRange(mainOccupiedRanges, rangeEntry);
       }
     });
     
     // 결과를 시작일 순으로 다시 정렬
     result.sort(function(a, b) {
-      return parseDate(a.startDate) - parseDate(b.startDate);
+      return dayNumber(a.startDate) - dayNumber(b.startDate);
     });
     
     return result;
@@ -856,7 +881,7 @@ $(document).ready(function() {
       startDate.setDate(startDate.getDate() - daysToSubtract);
     }
 
-    var dayMeta = {};
+    var dateIndexByDate = {};
     dayCells.forEach(function(dayCell) {
       var dayIndex = parseInt(dayCell.getAttribute('data-day-index'), 10);
       if (isNaN(dayIndex)) return;
@@ -864,17 +889,28 @@ $(document).ready(function() {
       var markerDate = new Date(startDate);
       markerDate.setDate(startDate.getDate() + dayIndex);
 
-      dayMeta[dayIndex] = {
-        date: formatDateYmd(markerDate)
-      };
+      dateIndexByDate[formatDateYmd(markerDate)] = dayIndex;
     });
 
+    var vacationDates = Object.keys(vacationMap);
     var rowIndex = 0;
     jsonData.categories.forEach(function(category) {
       (category.events || []).forEach(function(event) {
         var rowEl = rowEls[rowIndex];
         rowIndex += 1;
         if (!rowEl || !event.login) return;
+
+        var vacationDayIndexes = [];
+        vacationDates.forEach(function(dateKey) {
+          if (!vacationMap[dateKey] || !vacationMap[dateKey][event.login]) return;
+
+          var dayIndex = dateIndexByDate[dateKey];
+          if (typeof dayIndex === 'number') {
+            vacationDayIndexes.push(dayIndex);
+          }
+        });
+        if (!vacationDayIndexes.length) return;
+        vacationDayIndexes.sort(function(a, b) { return a - b; });
 
         var cellEntries = [];
         var dayCursor = 0;
@@ -894,14 +930,17 @@ $(document).ready(function() {
           }
         );
 
-        Object.keys(dayMeta).forEach(function(dayIndexKey) {
-          var dayIndex = parseInt(dayIndexKey, 10);
-          var meta = dayMeta[dayIndexKey];
-          if (!meta || !vacationMap[meta.date] || !vacationMap[meta.date][event.login]) return;
+        var cellCursor = 0;
+        vacationDayIndexes.forEach(function(dayIndex) {
+          while (
+            cellCursor < cellEntries.length &&
+            dayIndex >= cellEntries[cellCursor].startIndex + cellEntries[cellCursor].colspan
+          ) {
+            cellCursor += 1;
+          }
 
-          var cellEntry = cellEntries.find(function(entry) {
-            return dayIndex >= entry.startIndex && dayIndex < entry.startIndex + entry.colspan;
-          });
+          var cellEntry = cellEntries[cellCursor];
+          if (cellEntry && dayIndex < cellEntry.startIndex) return;
           if (!cellEntry) return;
 
           var cell = cellEntry.cell;
@@ -955,12 +994,11 @@ $(document).ready(function() {
       
       <%# 해당 사용자의 배경 일감 (다른 미완료 일감) 먼저 추가 %>
       <% if background_issues_by_user[user.id] %>
-        <% background_issues_by_user[user.id].sort_by(&:start_date).each do |bg_issue| %>
+        <% background_issues_by_user[user.id].each do |bg_issue| %>
           <%
             # 구현이 덜 끝난 상태 확인 (new, in_progress, in_review 상태 ID 기반)
             bg_status_id = bg_issue.status_id
-            bg_in_progress_status_ids = IssueStatus.new_ids + IssueStatus.in_progress_ids + IssueStatus.in_review_ids
-            bg_is_in_progress = bg_in_progress_status_ids.include?(bg_status_id)
+            bg_is_in_progress = in_progress_status_ids.include?(bg_status_id)
             bg_font_color = bg_is_in_progress ? "#555555" : "#AAAAAA"
           %>
           event.schedules.push({
@@ -979,14 +1017,13 @@ $(document).ready(function() {
       <% end %>
       
       <%# 메인 일감들 추가 %>
-      <% issues.sort_by(&:start_date).each do |issue| %>
+      <% issues.each do |issue| %>
         <%
           main_issue_id = issue_to_main_issue[issue.id]
           issue_color = main_issue_colors[main_issue_id] || '#999999'
           
           # 구현이 덜 끝난 상태 확인 (new, in_progress, in_review 상태 ID 기반)
           status_id = issue.status_id
-          in_progress_status_ids = IssueStatus.new_ids + IssueStatus.in_progress_ids + IssueStatus.in_review_ids
           is_in_progress = in_progress_status_ids.include?(status_id)
           
           # 구현 중인 일감은 기본 밝기, 구현 끝난 일감은 흐릿한 색상
@@ -1019,11 +1056,10 @@ $(document).ready(function() {
         };
 
         <% if background_issues_by_user[user.id] %>
-          <% background_issues_by_user[user.id].sort_by(&:start_date).each do |bg_issue| %>
+          <% background_issues_by_user[user.id].each do |bg_issue| %>
             <%
               bg_status_id = bg_issue.status_id
-              bg_in_progress_status_ids = IssueStatus.new_ids + IssueStatus.in_progress_ids + IssueStatus.in_review_ids
-              bg_is_in_progress = bg_in_progress_status_ids.include?(bg_status_id)
+              bg_is_in_progress = in_progress_status_ids.include?(bg_status_id)
               bg_font_color = bg_is_in_progress ? "#555555" : "#AAAAAA"
             %>
             hiddenEvent.schedules.push({

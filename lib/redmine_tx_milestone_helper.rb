@@ -5,6 +5,19 @@ module RedmineTxMilestoneHelper
   REVIEW_VERSION_CUSTOM_FIELD_SETTING = 'setting_milestone_review_version_custom_field_ids'.freeze
   AUTO_SCHEDULE_PRIORITY_CUSTOM_FIELD_SETTING = 'setting_milestone_auto_schedule_priority_custom_field_id'.freeze
   ISSUE_DETAIL_SCHEDULE_SUMMARY_TRACKER_SETTING = 'setting_milestone_issue_detail_schedule_summary_tracker_ids'.freeze
+  SCHEDULE_SUMMARY_ISSUE_PRELOAD_ASSOCIATIONS = [
+    :tracker,
+    :priority,
+    :status,
+    :assigned_to,
+    :parent,
+    { fixed_version: { custom_values: :custom_field } },
+    { custom_values: :custom_field }
+  ].freeze
+
+  def self.schedule_summary_issue_preload_associations
+    SCHEDULE_SUMMARY_ISSUE_PRELOAD_ASSOCIATIONS
+  end
 
   def self.major_issue_tags_plugin_available?
     Redmine::Plugin.respond_to?(:installed?) &&

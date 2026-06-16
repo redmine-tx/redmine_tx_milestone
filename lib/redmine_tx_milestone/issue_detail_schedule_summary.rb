@@ -16,8 +16,11 @@ module RedmineTxMilestone
 
     def initialize(issue, display_start_date)
       @issue = issue
-      @root_issue = issue.root
       @display_start_date = display_start_date
+      @root_issue = Issue.visible
+                         .where(id: issue.root_id || issue.id)
+                         .preload(*issue_preload_associations)
+                         .first || issue.root
     end
 
     def build
@@ -30,7 +33,7 @@ module RedmineTxMilestone
 
       all_issues = visible_related_issues(input_issue_ids, descendant_ids)
       # 동일 relation의 반복 실행(maximum/group_by/pluck/size마다 쿼리)을 막기 위해 한 번만 로드
-      filtered_issue_list = scheduled_display_issues(all_issues).to_a
+      filtered_issue_list = scheduled_display_issues(all_issues).preload(*issue_preload_associations).to_a
       assigned_issue_list = filtered_issue_list.select(&:assigned_to_id)
       timeline_start_date = display_start_date
       timeline_end_date = (filtered_issue_list.filter_map(&:due_date).max || Date.today) + 60.days
@@ -185,7 +188,9 @@ module RedmineTxMilestone
            .where.not(due_date: nil)
            .where.not(tracker_id: excluded_tracker_ids)
            .where('start_date >= ? OR due_date >= ?', timeline_start_date, timeline_start_date)
+           .preload(*issue_preload_associations)
            .group_by(&:assigned_to_id)
+           .transform_values { |issues| issues.sort_by(&:start_date) }
     end
 
     def full_day_vacation_map(timeline_users, timeline_start_date, timeline_end_date)
@@ -211,6 +216,10 @@ module RedmineTxMilestone
     rescue StandardError => e
       Rails.logger.warn "[RedmineTxMilestone] issue detail schedule summary vacations failed: #{e.message}"
       {}
+    end
+
+    def issue_preload_associations
+      RedmineTxMilestoneHelper.schedule_summary_issue_preload_associations
     end
   end
 end

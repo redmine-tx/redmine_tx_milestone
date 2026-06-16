@@ -36,7 +36,7 @@
         schedules: []
       }
 
-      Array(summary[:background_issues_by_user][user.id]).sort_by(&:start_date).each do |background_issue|
+      Array(summary[:background_issues_by_user][user.id]).each do |background_issue|
         background_in_progress = in_progress_status_ids.include?(background_issue.status_id)
         event[:schedules] << {
           name: "##{background_issue.id} : #{background_issue.subject}",
@@ -52,7 +52,7 @@
         }
       end
 
-      user_issues.sort_by(&:start_date).each do |scheduled_issue|
+      user_issues.each do |scheduled_issue|
         main_issue_id = summary[:issue_to_main_issue][scheduled_issue.id]
         issue_color = summary[:main_issue_colors][main_issue_id] || '#999999'
         issue_in_progress = in_progress_status_ids.include?(scheduled_issue.status_id)
@@ -83,7 +83,7 @@
         schedules: []
       }
 
-      Array(summary[:background_issues_by_user][user.id]).sort_by(&:start_date).each do |background_issue|
+      Array(summary[:background_issues_by_user][user.id]).each do |background_issue|
         background_in_progress = in_progress_status_ids.include?(background_issue.status_id)
         event[:schedules] << {
           name: "##{background_issue.id} : #{background_issue.subject}",
@@ -339,13 +339,39 @@ $(function() {
   function resolveScheduleOverlaps(schedules) {
     if (!schedules || schedules.length <= 1) return schedules;
 
+    var dayNumberCache = {};
+    var msPerDay = 1000 * 60 * 60 * 24;
+
+    function dayNumber(dateStr) {
+      if (!Object.prototype.hasOwnProperty.call(dayNumberCache, dateStr)) {
+        dayNumberCache[dateStr] = Math.floor(parseDate(dateStr).getTime() / msPerDay);
+      }
+      return dayNumberCache[dateStr];
+    }
+
+    function formatDateFromDayNumber(dayNum) {
+      return formatDate(new Date(dayNum * msPerDay));
+    }
+
+    function durationDays(schedule) {
+      return dayNumber(schedule.endDate) - dayNumber(schedule.startDate) + 1;
+    }
+
+    function addOccupiedRange(ranges, range) {
+      var insertAt = ranges.length;
+      while (insertAt > 0 && ranges[insertAt - 1].start > range.start) {
+        insertAt -= 1;
+      }
+      ranges.splice(insertAt, 0, range);
+    }
+
     var sorted = schedules.slice().sort(function(a, b) {
       if (a.isMuted !== b.isMuted) {
         return a.isMuted ? 1 : -1;
       }
 
-      var startDiff = parseDate(a.startDate) - parseDate(b.startDate);
-      return startDiff !== 0 ? startDiff : getDuration(b) - getDuration(a);
+      var startDiff = dayNumber(a.startDate) - dayNumber(b.startDate);
+      return startDiff !== 0 ? startDiff : durationDays(b) - durationDays(a);
     });
 
     var result = [];
@@ -353,32 +379,28 @@ $(function() {
     var allOccupiedRanges = [];
 
     sorted.forEach(function(schedule) {
-      var schedStart = parseDate(schedule.startDate);
-      var schedEnd = parseDate(schedule.endDate);
+      var schedStart = dayNumber(schedule.startDate);
+      var schedEnd = dayNumber(schedule.endDate);
 
       if (schedule.isMuted) {
-        var periodsToProcess = [{ start: new Date(schedStart), end: new Date(schedEnd) }];
+        var periodsToProcess = [{ start: schedStart, end: schedEnd }];
 
-        allOccupiedRanges.slice().sort(function(a, b) {
-          return a.start - b.start;
-        }).forEach(function(occupied) {
+        allOccupiedRanges.forEach(function(occupied) {
           var nextPeriods = [];
 
           periodsToProcess.forEach(function(period) {
             if (period.start <= occupied.end && period.end >= occupied.start) {
               if (period.start < occupied.start) {
-                var beforeEnd = new Date(occupied.start);
-                beforeEnd.setDate(beforeEnd.getDate() - 1);
+                var beforeEnd = occupied.start - 1;
                 if (beforeEnd >= period.start) {
-                  nextPeriods.push({ start: new Date(period.start), end: beforeEnd });
+                  nextPeriods.push({ start: period.start, end: beforeEnd });
                 }
               }
 
               if (period.end > occupied.end) {
-                var afterStart = new Date(occupied.end);
-                afterStart.setDate(afterStart.getDate() + 1);
+                var afterStart = occupied.end + 1;
                 if (afterStart <= period.end) {
-                  nextPeriods.push({ start: afterStart, end: new Date(period.end) });
+                  nextPeriods.push({ start: afterStart, end: period.end });
                 }
               }
             } else {
@@ -391,27 +413,24 @@ $(function() {
 
         periodsToProcess.forEach(function(period) {
           var adjustedSchedule = cloneSchedule(schedule);
-          adjustedSchedule.startDate = formatDate(period.start);
-          adjustedSchedule.endDate = formatDate(period.end);
+          adjustedSchedule.startDate = formatDateFromDayNumber(period.start);
+          adjustedSchedule.endDate = formatDateFromDayNumber(period.end);
 
-          if (formatDate(schedStart) !== adjustedSchedule.startDate || formatDate(schedEnd) !== adjustedSchedule.endDate) {
-            adjustedSchedule.originalStartDate = formatDate(schedStart);
-            adjustedSchedule.originalEndDate = formatDate(schedEnd);
+          if (schedule.startDate !== adjustedSchedule.startDate || schedule.endDate !== adjustedSchedule.endDate) {
+            adjustedSchedule.originalStartDate = schedule.startDate;
+            adjustedSchedule.originalEndDate = schedule.endDate;
           }
 
           result.push(adjustedSchedule);
-          allOccupiedRanges.push({ start: new Date(period.start), end: new Date(period.end) });
+          addOccupiedRange(allOccupiedRanges, { start: period.start, end: period.end });
         });
       } else {
-        var adjustedStart = new Date(schedStart);
-        var adjustedEnd = new Date(schedEnd);
+        var adjustedStart = schedStart;
+        var adjustedEnd = schedEnd;
 
-        mainOccupiedRanges.slice().sort(function(a, b) {
-          return a.start - b.start;
-        }).forEach(function(occupied) {
+        mainOccupiedRanges.forEach(function(occupied) {
           if (adjustedStart <= occupied.end && adjustedEnd >= occupied.start) {
-            var nextDay = new Date(occupied.end);
-            nextDay.setDate(nextDay.getDate() + 1);
+            var nextDay = occupied.end + 1;
             if (nextDay > adjustedStart) {
               adjustedStart = nextDay;
             }
@@ -421,22 +440,22 @@ $(function() {
         if (adjustedStart > adjustedEnd) return;
 
         var adjustedMainSchedule = cloneSchedule(schedule);
-        adjustedMainSchedule.startDate = formatDate(adjustedStart);
-        adjustedMainSchedule.endDate = formatDate(adjustedEnd);
+        adjustedMainSchedule.startDate = formatDateFromDayNumber(adjustedStart);
+        adjustedMainSchedule.endDate = formatDateFromDayNumber(adjustedEnd);
 
-        if (formatDate(schedStart) !== adjustedMainSchedule.startDate) {
-          adjustedMainSchedule.originalStartDate = formatDate(schedStart);
+        if (schedule.startDate !== adjustedMainSchedule.startDate) {
+          adjustedMainSchedule.originalStartDate = schedule.startDate;
         }
 
         result.push(adjustedMainSchedule);
-        var rangeEntry = { start: new Date(adjustedStart), end: new Date(adjustedEnd) };
-        allOccupiedRanges.push(rangeEntry);
-        mainOccupiedRanges.push({ start: new Date(adjustedStart), end: new Date(adjustedEnd) });
+        var rangeEntry = { start: adjustedStart, end: adjustedEnd };
+        addOccupiedRange(allOccupiedRanges, rangeEntry);
+        addOccupiedRange(mainOccupiedRanges, rangeEntry);
       }
     });
 
     return result.sort(function(a, b) {
-      return parseDate(a.startDate) - parseDate(b.startDate);
+      return dayNumber(a.startDate) - dayNumber(b.startDate);
     });
   }
 
