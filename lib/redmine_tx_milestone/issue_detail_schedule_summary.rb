@@ -137,7 +137,7 @@ module RedmineTxMilestone
       result_data = {}
 
       groups_to_show.each do |group|
-        group_user_ids = group.users.map(&:id)
+        group_user_ids = RedmineTxMilestoneHelper.schedule_summary_active_group_users(group).map(&:id)
         group_users_issues = {}
 
         group_user_ids.each do |user_id|
@@ -169,7 +169,7 @@ module RedmineTxMilestone
       hidden_registered_user_ids = registered_user_ids.dup
 
       result_data.each_key.each_with_object({}) do |group, hidden_by_group|
-        hidden_users = group.users
+        hidden_users = RedmineTxMilestoneHelper.schedule_summary_active_group_users(group)
                             .sort_by(&:name)
                             .reject { |user| hidden_registered_user_ids.include?(user.id) }
         hidden_users.each { |user| hidden_registered_user_ids.add(user.id) }

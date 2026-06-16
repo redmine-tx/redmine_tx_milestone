@@ -1216,7 +1216,9 @@ class MilestoneController < ApplicationController
       mode = schedule_summary_mode
 
       groups_to_show = schedule_summary_groups_to_show
-      selected_user_ids = groups_to_show.flat_map { |group| group.users.map(&:id) }.uniq
+      selected_user_ids = groups_to_show.flat_map do |group|
+        RedmineTxMilestoneHelper.schedule_summary_active_group_users(group).map(&:id)
+      end.uniq
       issue_preload_associations = RedmineTxMilestoneHelper.schedule_summary_issue_preload_associations
 
       if mode == 'team'

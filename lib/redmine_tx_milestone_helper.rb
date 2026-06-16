@@ -19,6 +19,10 @@ module RedmineTxMilestoneHelper
     SCHEDULE_SUMMARY_ISSUE_PRELOAD_ASSOCIATIONS
   end
 
+  def self.schedule_summary_active_group_users(group)
+    Array(group&.users).select(&:active?)
+  end
+
   def self.major_issue_tags_plugin_available?
     Redmine::Plugin.respond_to?(:installed?) &&
       Redmine::Plugin.installed?(:redmineup_tags) &&

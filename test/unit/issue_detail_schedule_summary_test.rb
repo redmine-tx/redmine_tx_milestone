@@ -13,6 +13,7 @@ class IssueDetailScheduleSummaryTest < ActiveSupport::TestCase
            :trackers,
            :projects_trackers,
            :enabled_modules,
+           :enumerations,
            :groups_users
 
   def setup
@@ -26,10 +27,16 @@ class IssueDetailScheduleSummaryTest < ActiveSupport::TestCase
     suffix = SecureRandom.hex(4)
     visible_user = User.generate!(login: "visible_#{suffix}", mail: "visible_#{suffix}@example.com")
     hidden_user = User.generate!(login: "hidden_#{suffix}", mail: "hidden_#{suffix}@example.com")
+    inactive_user = User.generate!(
+      login: "inactive_#{suffix}",
+      mail: "inactive_#{suffix}@example.com"
+    )
     User.add_to_project(visible_user, project)
     User.add_to_project(hidden_user, project)
+    User.add_to_project(inactive_user, project)
     group.users << visible_user
     group.users << hidden_user
+    group.users << inactive_user
 
     root_issue = Issue.generate!(
       project: project,
@@ -45,11 +52,21 @@ class IssueDetailScheduleSummaryTest < ActiveSupport::TestCase
       start_date: Date.today + 1.day,
       due_date: Date.today + 3.days
     )
+    Issue.generate!(
+      project: project,
+      tracker: tracker,
+      assigned_to: inactive_user,
+      start_date: Date.today + 1.day,
+      due_date: Date.today + 3.days
+    )
+    inactive_user.update!(status: User::STATUS_LOCKED)
 
     summary = RedmineTxMilestone::IssueDetailScheduleSummary.build(root_issue, display_start_date: Date.yesterday)
 
     assert_includes summary[:result_data].keys, group
     assert_includes summary[:hidden_teammates_by_group][group], hidden_user
+    assert_not_includes summary[:hidden_teammates_by_group][group], inactive_user
+    assert_nil summary[:background_issues_by_user][inactive_user.id]
     assert_equal [background_issue.id], summary[:background_issues_by_user][hidden_user.id].map(&:id)
   end
 

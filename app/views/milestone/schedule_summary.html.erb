@@ -243,7 +243,7 @@ groups_to_show = schedule_summary_groups_to_show
 group_user_mapping = {}
 groups_to_show.each do |group|
   # schedule_summary_all_groups가 users를 미리 로드하므로 pluck(그룹당 1쿼리) 대신 map 사용
-  group_user_mapping[group] = group.users.map(&:id)
+  group_user_mapping[group] = RedmineTxMilestoneHelper.schedule_summary_active_group_users(group).map(&:id)
 end
 selected_team_user_ids = group_user_mapping.values.flatten.uniq
 has_explicit_group_param = params.key?(:group_ids) || params.key?('group_ids')
@@ -428,7 +428,7 @@ end
   if summary_mode == 'issue'
     hidden_registered_user_ids = registered_user_ids.dup
     result_data.keys.each do |group|
-      hidden_users = group.users
+      hidden_users = RedmineTxMilestoneHelper.schedule_summary_active_group_users(group)
                           .sort_by(&:name)
                           .reject { |user| hidden_registered_user_ids.include?(user.id) }
       hidden_users.each { |user| hidden_registered_user_ids.add(user.id) }

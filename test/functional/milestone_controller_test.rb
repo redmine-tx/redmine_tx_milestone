@@ -57,6 +57,23 @@ class MilestoneControllerTest < Redmine::ControllerTest
     assert_includes response.body, 'tx_milestone_schedule_summary'
   end
 
+  def test_schedule_summary_team_mode_counts_only_active_group_users
+    group = Group.generate!(name: 'Schedule summary active users')
+    active_user = User.generate!
+    inactive_user = User.generate!(status: User::STATUS_LOCKED)
+    group.users << active_user
+    group.users << inactive_user
+
+    get :schedule_summary, params: {
+      project_id: 'ecookbook',
+      summary_mode: 'team',
+      group_ids: [group.id.to_s]
+    }
+
+    assert_response :success
+    assert_match(/구성원:\s*<strong>1명<\/strong>/, response.body)
+  end
+
   def test_update_issue_schedule_updates_dates
     issue = Issue.find(1)
     new_start_date = issue.start_date + 1.day
